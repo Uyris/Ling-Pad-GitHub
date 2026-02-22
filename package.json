@@ -1,0 +1,11 @@
+{
+  "name": "ling-pad",
+  "version": "0.1.0",
+  "description": "A lightweight browser-based text pad with linguistic utilities",
+  "scripts": {
+    "start": "npx serve ."
+  },
+  "keywords": ["linguistics", "notepad", "text-editor"],
+  "author": "",
+  "license": "MIT"
+}

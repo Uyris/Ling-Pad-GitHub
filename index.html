@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ling-Pad</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Ling-Pad</h1>
+    <div class="header-actions">
+      <button id="btn-clear" title="Clear text">Clear</button>
+      <button id="btn-export" title="Export as .txt">Export</button>
+    </div>
+  </header>
+
+  <main>
+    <textarea id="editor" placeholder="Start typing…" spellcheck="true" autofocus></textarea>
+
+    <aside id="stats">
+      <h2>Statistics</h2>
+      <ul>
+        <li><span class="label">Characters</span><span id="stat-chars">0</span></li>
+        <li><span class="label">Words</span><span id="stat-words">0</span></li>
+        <li><span class="label">Sentences</span><span id="stat-sentences">0</span></li>
+        <li><span class="label">Avg word length</span><span id="stat-avg-word">0</span></li>
+      </ul>
+
+      <h2>Top words</h2>
+      <ol id="top-words"></ol>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
