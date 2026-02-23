@@ -4,32 +4,46 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 )
 
 func main() {
+
+	// Verifica se um argumento que foi fornecido é válido
 	if len(os.Args) < 2 {
-		panic("No input provided")
+		panic("Nenhum argumento fornecido. Por favor, forneça uma expressão matemática como argumento.")
 	}
 
 	input := os.Args[1]
-	// Remove all spaces
-	input = strings.ReplaceAll(input, " ", "")
 
 	if len(input) == 0 {
-		panic("Empty input")
+		panic("Expressão vazia. Por favor, forneça uma expressão matemática válida.")
 	}
 
-	result := 0
-	currentNumber := ""
-	operation := '+'
+	// Variáveis para armazenar o resultado, o número atual e a operação atual
+	var result int = 0
+	var currentNumber string = ""
+	var operation rune = '+'
+	var numberCompleted bool = false
 
-	for _, ch := range input {
-		if ch >= '0' && ch <= '9' {
-			currentNumber += string(ch)
-		} else if ch == '+' || ch == '-' {
+	// Itera sobre cada caractere da expressão
+	for _, caractere := range input {
+		if caractere == ' ' {
+			// Ignora espaços, mas marca que um número foi completado se houver um
+			if currentNumber != "" {
+				numberCompleted = true
+			}
+			continue
+		}
+
+		if caractere >= '0' && caractere <= '9' {
+			// Se já completamos um número e não encontramos operador, é erro
+			if numberCompleted {
+				panic("Expressão inválida: dois números sem operador")
+			}
+			currentNumber += string(caractere)
+		} else if caractere == '+' || caractere == '-' {
 			if currentNumber == "" {
-				panic("Invalid expression: operator without number")
+				panic("Expressão inválida: operador sem número")
 			}
 			num, err := strconv.Atoi(currentNumber)
 			if err != nil {
@@ -41,15 +55,15 @@ func main() {
 				result -= num
 			}
 			currentNumber = ""
-			operation = ch
+			operation = caractere
+			numberCompleted = false
 		} else {
-			panic("Invalid character: " + string(ch))
+			panic("Caractere inválido: " + string(caractere))
 		}
 	}
 
-	// Process the last number
 	if currentNumber == "" {
-		panic("Invalid expression: ends with operator")
+		panic("Expressão inválida: termina com operador")
 	}
 	num, err := strconv.Atoi(currentNumber)
 	if err != nil {
