@@ -139,15 +139,11 @@ func Run(code string) int {
 
 func main() {
 	if len(os.Args) < 2 {
-		panic("Nenhum argumento fornecido. Por favor, forneça uma expressão matemática como argumento.")
+		fmt.Fprintln(os.Stderr, "[Main] Nenhum argumento fornecido. Uso: main <expressão>")
+		os.Exit(1)
 	}
 
 	input := os.Args[1]
-
-	if len(input) == 0 {
-		panic("Expressão vazia. Por favor, forneça uma expressão matemática válida.")
-	}
-
 	result := Run(input)
 	fmt.Println(result)
 }
