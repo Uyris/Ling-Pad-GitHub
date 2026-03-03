@@ -15,6 +15,10 @@ const (
 	PLUS  = "PLUS"
 	MINUS = "MINUS"
 	XOR   = "XOR"
+	MULT  = "MULT"
+	DIV   = "DIV"
+	OPEN_PAR = "OPEN_PAR"
+	CLOSE_PAR = "CLOSE_PAR"
 	EOF   = "EOF"
 )
 
@@ -65,6 +69,18 @@ func (l *Lexer) SelectNext() {
 	} else if currentChar == '^' {
 		l.next = Token{tokenType: XOR, value: "^"}
 		l.position++
+	} else if currentChar == '*' {
+		l.next = Token{tokenType: MULT, value: "*"}
+		l.position++
+	} else if currentChar == '/' {
+		l.next = Token{tokenType: DIV, value: "/"}
+		l.position++
+	} else if currentChar == '(' {
+		l.next = Token{tokenType: OPEN_PAR, value: "("}
+		l.position++
+	} else if currentChar == ')' {
+		l.next = Token{tokenType: CLOSE_PAR, value: ")"}
+		l.position++
 	} else if unicode.IsDigit(currentChar) {
 		numStr := string(currentChar)
 		l.position++
@@ -97,8 +113,7 @@ func ParseExpression() int {
 		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected INT")
 	}
 
-	result := parserLexer.next.value.(int)
-	parserLexer.SelectNext()
+	result := ParseTerm()
 
 	// Enquanto o próximo token for PLUS, MINUS ou XOR
 	for parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS || parserLexer.next.tokenType == XOR {
@@ -124,6 +139,75 @@ func ParseExpression() int {
 	}
 
 	return result
+}
+
+func ParseTerm() int {
+	// O primeiro token deve ser um número
+	if parserLexer.next.tokenType != INT {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected INT")
+	}
+
+	result := ParseFactor()
+	parserLexer.SelectNext()
+
+	// Enquanto o próximo token for MULT ou DIV
+	for parserLexer.next.tokenType == MULT || parserLexer.next.tokenType == DIV {
+		op := parserLexer.next.tokenType
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != INT {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected INT after operator")
+		}
+
+		num := parserLexer.next.value.(int)
+
+		if op == MULT {
+			result *= num
+		} else {
+			if num == 0 {
+				panic("[Parser] Division by zero")
+			}
+			result /= num
+		}
+
+		parserLexer.SelectNext()
+	}
+
+	return result
+}
+
+func ParseFactor() int {
+	// O primeiro token deve ser um número ou um parêntese aberto
+	if parserLexer.next.tokenType == OPEN_PAR {
+		parserLexer.SelectNext()
+		result := ParseExpression()
+		if parserLexer.next.tokenType != CLOSE_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+		}
+		parserLexer.SelectNext()
+		return result
+	}
+
+	//Para operações unárias, como -5 ou +3, podemos verificar se o próximo token é um operador unário e, em seguida, consumir o número seguinte. Por exemplo:
+	if parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS {
+		op := parserLexer.next.tokenType
+		parserLexer.SelectNext()
+		if parserLexer.next.tokenType != INT {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected INT after unary operator")
+		}
+		num := parserLexer.next.value.(int)
+		if op == MINUS {
+			num = -num
+		}
+		return ParseFactor() // Permite encadeamento de operadores unários, como --5 ou ++3
+	}
+	
+	if parserLexer.next.tokenType == INT {
+		result := parserLexer.next.value.(int)
+		parserLexer.SelectNext()
+		return result
+	}
+	panic("[Parser] Unexpected token in factor: " + parserLexer.next.tokenType)
 }
 
 // Run é o ponto de entrada do Parser. Recebe o código-fonte, inicializa o Lexer e retorna o resultado.
