@@ -14,6 +14,7 @@ const (
 	INT   = "INT"
 	PLUS  = "PLUS"
 	MINUS = "MINUS"
+	XOR   = "XOR"
 	EOF   = "EOF"
 )
 
@@ -61,6 +62,9 @@ func (l *Lexer) SelectNext() {
 	} else if currentChar == '-' {
 		l.next = Token{tokenType: MINUS, value: "-"}
 		l.position++
+	} else if currentChar == '^' {
+		l.next = Token{tokenType: XOR, value: "^"}
+		l.position++
 	} else if unicode.IsDigit(currentChar) {
 		numStr := string(currentChar)
 		l.position++
@@ -96,8 +100,8 @@ func ParseExpression() int {
 	result := parserLexer.next.value.(int)
 	parserLexer.SelectNext()
 
-	// Enquanto o próximo token for PLUS ou MINUS
-	for parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS {
+	// Enquanto o próximo token for PLUS, MINUS ou XOR
+	for parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS || parserLexer.next.tokenType == XOR {
 		op := parserLexer.next.tokenType
 		parserLexer.SelectNext()
 
@@ -110,8 +114,10 @@ func ParseExpression() int {
 
 		if op == PLUS {
 			result += num
-		} else {
+		} else if op == MINUS {
 			result -= num
+		} else {
+			result ^= num
 		}
 
 		parserLexer.SelectNext()
