@@ -9,7 +9,7 @@
 **Descrição:** A expressão começa com um `NUMBER`, seguido de zero ou mais operações `+` ou `-`, cada uma seguida por outro `NUMBER`.
 
 **EBNF:**
-```bash
+```ebnf
 EXPRESSION = TERM, { ("+" | "-"), TERM } ;
 TERM = FACTOR, { ("*" | "/"), FACTOR } ;
 FACTOR = ("+" | "-"), FACTOR | "(", EXPRESSION, ")" | NUMBER ;
