@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"unicode"
@@ -133,14 +134,14 @@ func ParseExpression() int {
 }
 
 func ParseTerm() int {
-	result := ParseFactor()
+	result := ParsePower()
 
 	// Enquanto o próximo token for MULT ou DIV
 	for parserLexer.next.tokenType == MULT || parserLexer.next.tokenType == DIV {
 		op := parserLexer.next.tokenType
 		parserLexer.SelectNext()
 
-		rightValue := ParseFactor()
+		rightValue := ParsePower()
 
 		if op == MULT {
 			result *= rightValue
@@ -153,6 +154,19 @@ func ParseTerm() int {
 	}
 
 	return result
+}
+
+// ParsePower lida com exponenciação (**), associativa à direita
+func ParsePower() int {
+	base := ParseFactor()
+
+	if parserLexer.next.tokenType == POW {
+		parserLexer.SelectNext()
+		exponent := ParsePower() // recursão à direita para associatividade à direita
+		return int(math.Pow(float64(base), float64(exponent)))
+	}
+
+	return base
 }
 
 func ParseFactor() int {
@@ -175,13 +189,6 @@ func ParseFactor() int {
 		if op == MINUS {
 			result = -result
 		}
-		return result
-	}
-
-	// Exponenciação (permite encadeamento como 2 ** 3 ** 2)
-	if parserLexer.next.tokenType == POW {
-		parserLexer.SelectNext()
-		result := ParseFactor()
 		return result
 	}
 
