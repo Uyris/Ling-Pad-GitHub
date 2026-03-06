@@ -17,6 +17,7 @@ const (
 	XOR       = "XOR"
 	MULT      = "MULT"
 	DIV       = "DIV"
+	POW       = "POW"
 	OPEN_PAR  = "OPEN_PAR"
 	CLOSE_PAR = "CLOSE_PAR"
 	EOF       = "EOF"
@@ -69,6 +70,9 @@ func (l *Lexer) SelectNext() {
 	} else if currentChar == '^' {
 		l.next = Token{tokenType: XOR, value: "^"}
 		l.position++
+	} else if currentChar == '*' && l.position+1 < len(l.source) && l.source[l.position+1] == '*' {
+		l.next = Token{tokenType: POW, value: "**"}
+		l.position += 2
 	} else if currentChar == '*' {
 		l.next = Token{tokenType: MULT, value: "*"}
 		l.position++
@@ -105,7 +109,6 @@ type Parser struct{}
 
 // lexer é o atributo estático (variável de pacote) do Parser
 var parserLexer *Lexer
-
 
 func ParseExpression() int {
 	result := ParseTerm()
@@ -172,6 +175,13 @@ func ParseFactor() int {
 		if op == MINUS {
 			result = -result
 		}
+		return result
+	}
+
+	// Exponenciação (permite encadeamento como 2 ** 3 ** 2)
+	if parserLexer.next.tokenType == POW {
+		parserLexer.SelectNext()
+		result := ParseFactor()
 		return result
 	}
 
