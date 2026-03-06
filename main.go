@@ -134,14 +134,14 @@ func ParseExpression() int {
 }
 
 func ParseTerm() int {
-	result := ParsePower()
+	result := ParseUnary()
 
 	// Enquanto o próximo token for MULT ou DIV
 	for parserLexer.next.tokenType == MULT || parserLexer.next.tokenType == DIV {
 		op := parserLexer.next.tokenType
 		parserLexer.SelectNext()
 
-		rightValue := ParsePower()
+		rightValue := ParseUnary()
 
 		if op == MULT {
 			result *= rightValue
@@ -156,19 +156,34 @@ func ParseTerm() int {
 	return result
 }
 
+// ParseUnary lida com operadores unários (+ e -)
+func ParseUnary() int {
+	if parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS {
+		op := parserLexer.next.tokenType
+		parserLexer.SelectNext()
+		result := ParseUnary()
+		if op == MINUS {
+			result = -result
+		}
+		return result
+	}
+	return ParsePower()
+}
+
 // ParsePower lida com exponenciação (**), associativa à direita
 func ParsePower() int {
 	base := ParseFactor()
 
 	if parserLexer.next.tokenType == POW {
 		parserLexer.SelectNext()
-		exponent := ParsePower() // recursão à direita para associatividade à direita
+		exponent := ParseUnary() // lado direito permite unário para -2**2 à direita
 		return int(math.Pow(float64(base), float64(exponent)))
 	}
 
 	return base
 }
 
+// ParseFactor lida com parênteses e números
 func ParseFactor() int {
 	// Parênteses
 	if parserLexer.next.tokenType == OPEN_PAR {
@@ -181,17 +196,6 @@ func ParseFactor() int {
 		return result
 	}
 
-	// Operadores unários (permite encadeamento como --5 ou ++3)
-	if parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS {
-		op := parserLexer.next.tokenType
-		parserLexer.SelectNext()
-		result := ParseFactor()
-		if op == MINUS {
-			result = -result
-		}
-		return result
-	}
-
 	// Número
 	if parserLexer.next.tokenType == INT {
 		result := parserLexer.next.value.(int)
@@ -199,7 +203,7 @@ func ParseFactor() int {
 		return result
 	}
 
-	panic("[Parser] Unexpected token in factor: " + parserLexer.next.tokenType)
+	panic("[Parser] Unexpected token in primary: " + parserLexer.next.tokenType)
 }
 
 // Run é o ponto de entrada do Parser. Recebe o código-fonte, inicializa o Lexer e retorna o resultado.
