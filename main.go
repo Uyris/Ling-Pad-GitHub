@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -19,11 +20,24 @@ const (
 	XOR       = "XOR"
 	MULT      = "MULT"
 	DIV       = "DIV"
+	POW       = "POW"
+	AND       = "AND"
+	OR        = "OR"
+	NOT       = "NOT"
+	EQ        = "EQ"
+	GT        = "GT"
+	LT        = "LT"
 	OPEN_PAR  = "OPEN_PAR"
 	CLOSE_PAR = "CLOSE_PAR"
+	OPEN_BRA  = "OPEN_BRA"
+	CLOSE_BRA = "CLOSE_BRA"
 	ASSIGN    = "ASSIGN"
 	END       = "END"
+	IF        = "IF"
+	WHILE     = "WHILE"
+	ELSE      = "ELSE"
 	PRINT     = "PRINT"
+	READ      = "READ"
 	IDEN      = "IDEN"
 	EOF       = "EOF"
 )
@@ -126,11 +140,35 @@ func (l *Lexer) SelectNext() {
 	} else if currentChar == '^' {
 		l.next = Token{tokenType: XOR, value: "^"}
 		l.position++
+	} else if currentChar == '*' && l.position+1 < len(l.source) && l.source[l.position+1] == '*' {
+		l.next = Token{tokenType: POW, value: "**"}
+		l.position += 2
 	} else if currentChar == '*' {
 		l.next = Token{tokenType: MULT, value: "*"}
 		l.position++
 	} else if currentChar == '/' {
 		l.next = Token{tokenType: DIV, value: "/"}
+		l.position++
+	} else if currentChar == '&' && l.position+1 < len(l.source) && l.source[l.position+1] == '&' {
+		l.next = Token{tokenType: AND, value: "&&"}
+		l.position += 2
+	} else if currentChar == '|' && l.position+1 < len(l.source) && l.source[l.position+1] == '|' {
+		l.next = Token{tokenType: OR, value: "||"}
+		l.position += 2
+	} else if currentChar == '!' {
+		l.next = Token{tokenType: NOT, value: "!"}
+		l.position++
+	} else if currentChar == '=' && l.position+1 < len(l.source) && l.source[l.position+1] == '=' {
+		l.next = Token{tokenType: EQ, value: "=="}
+		l.position += 2
+	} else if currentChar == '=' {
+		l.next = Token{tokenType: ASSIGN, value: "="}
+		l.position++
+	} else if currentChar == '>' {
+		l.next = Token{tokenType: GT, value: ">"}
+		l.position++
+	} else if currentChar == '<' {
+		l.next = Token{tokenType: LT, value: "<"}
 		l.position++
 	} else if currentChar == '(' {
 		l.next = Token{tokenType: OPEN_PAR, value: "("}
@@ -138,8 +176,11 @@ func (l *Lexer) SelectNext() {
 	} else if currentChar == ')' {
 		l.next = Token{tokenType: CLOSE_PAR, value: ")"}
 		l.position++
-	} else if currentChar == '=' {
-		l.next = Token{tokenType: ASSIGN, value: "="}
+	} else if currentChar == '{' {
+		l.next = Token{tokenType: OPEN_BRA, value: "{"}
+		l.position++
+	} else if currentChar == '}' {
+		l.next = Token{tokenType: CLOSE_BRA, value: "}"}
 		l.position++
 	} else if currentChar == ';' {
 		l.next = Token{tokenType: END, value: ";"}
@@ -168,10 +209,19 @@ func (l *Lexer) SelectNext() {
 			l.position++
 		}
 
-		// Verificar se é "println" seguido de "!"
+		// Verificar palavras reservadas
 		if identStr == "println" && l.position < len(l.source) && rune(l.source[l.position]) == '!' {
 			l.position++ // Consumir o "!"
 			l.next = Token{tokenType: PRINT, value: "println"}
+		} else if identStr == "scanln" && l.position < len(l.source) && rune(l.source[l.position]) == '!' {
+			l.position++ // Consumir o "!"
+			l.next = Token{tokenType: READ, value: "scanln"}
+		} else if identStr == "if" {
+			l.next = Token{tokenType: IF, value: "if"}
+		} else if identStr == "while" {
+			l.next = Token{tokenType: WHILE, value: "while"}
+		} else if identStr == "else" {
+			l.next = Token{tokenType: ELSE, value: "else"}
 		} else if identStr == "println" {
 			// "println" sem "!" é um identificador normal
 			l.next = Token{tokenType: IDEN, value: identStr}
@@ -220,6 +270,11 @@ func (n *UnOp) Evaluate(st *SymbolTable) int {
 		return -childResult
 	} else if n.value == "+" {
 		return childResult
+	} else if n.value == "!" {
+		if childResult == 0 {
+			return 1
+		}
+		return 0
 	}
 	panic("[Semantic] Unknown unary operator: " + n.value)
 }
@@ -235,6 +290,30 @@ func NewBinOp(operator string, left Node, right Node) *BinOp {
 }
 
 func (n *BinOp) Evaluate(st *SymbolTable) int {
+	if n.value == "&&" {
+		leftResult := n.children[0].Evaluate(st)
+		if leftResult == 0 {
+			return 0
+		}
+		rightResult := n.children[1].Evaluate(st)
+		if rightResult != 0 {
+			return 1
+		}
+		return 0
+	}
+
+	if n.value == "||" {
+		leftResult := n.children[0].Evaluate(st)
+		if leftResult != 0 {
+			return 1
+		}
+		rightResult := n.children[1].Evaluate(st)
+		if rightResult != 0 {
+			return 1
+		}
+		return 0
+	}
+
 	leftResult := n.children[0].Evaluate(st)
 	rightResult := n.children[1].Evaluate(st)
 
@@ -252,6 +331,23 @@ func (n *BinOp) Evaluate(st *SymbolTable) int {
 			panic("[Semantic] Division by zero")
 		}
 		return leftResult / rightResult
+	case "**":
+		return int(math.Pow(float64(leftResult), float64(rightResult)))
+	case "==":
+		if leftResult == rightResult {
+			return 1
+		}
+		return 0
+	case ">":
+		if leftResult > rightResult {
+			return 1
+		}
+		return 0
+	case "<":
+		if leftResult < rightResult {
+			return 1
+		}
+		return 0
 	}
 	panic("[Semantic] Unknown binary operator: " + n.value)
 }
@@ -299,6 +395,63 @@ func (n *Assignment) Evaluate(st *SymbolTable) int {
 	value := n.children[1].Evaluate(st)
 	st.Set(identNode.name, value)
 	return 0
+}
+
+// IfNode representa uma estrutura condicional if/else
+type IfNode struct {
+	children []Node
+}
+
+func NewIfNode(condition Node, thenBranch Node, elseBranch Node) *IfNode {
+	children := []Node{condition, thenBranch}
+	if elseBranch != nil {
+		children = append(children, elseBranch)
+	}
+	return &IfNode{children: children}
+}
+
+func (n *IfNode) Evaluate(st *SymbolTable) int {
+	condition := n.children[0].Evaluate(st)
+	if condition != 0 {
+		n.children[1].Evaluate(st)
+	} else if len(n.children) == 3 {
+		n.children[2].Evaluate(st)
+	}
+	return 0
+}
+
+// WhileNode representa uma estrutura de repetição while
+type WhileNode struct {
+	children []Node
+}
+
+func NewWhileNode(condition Node, body Node) *WhileNode {
+	return &WhileNode{children: []Node{condition, body}}
+}
+
+func (n *WhileNode) Evaluate(st *SymbolTable) int {
+	for n.children[0].Evaluate(st) != 0 {
+		n.children[1].Evaluate(st)
+	}
+	return 0
+}
+
+// ReadNode representa a leitura de inteiro do terminal
+type ReadNode struct {
+	children []Node
+}
+
+func NewReadNode() *ReadNode {
+	return &ReadNode{children: []Node{}}
+}
+
+func (n *ReadNode) Evaluate(st *SymbolTable) int {
+	var value int
+	_, err := fmt.Fscan(os.Stdin, &value)
+	if err != nil {
+		panic("[Semantic] Failed to read integer input")
+	}
+	return value
 }
 
 // Block representa um bloco de instruções
@@ -353,8 +506,79 @@ func ParseProgram() Node {
 	return block
 }
 
+func ParseBlock() Node {
+	if parserLexer.next.tokenType != OPEN_BRA {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_BRA")
+	}
+	parserLexer.SelectNext()
+
+	block := NewBlock()
+	for parserLexer.next.tokenType != CLOSE_BRA {
+		if parserLexer.next.tokenType == EOF {
+			panic("[Parser] Unexpected EOF, expected CLOSE_BRA")
+		}
+		stmt := ParseStatement()
+		block.AddChild(stmt)
+	}
+
+	parserLexer.SelectNext()
+	return block
+}
+
 func ParseStatement() Node {
-	// Atribuição: IDENTIFIER = EXPRESSION ;
+	// Bloco: { STATEMENT* }
+	if parserLexer.next.tokenType == OPEN_BRA {
+		return ParseBlock()
+	}
+
+	// IF: if ( BOOLEXPRESSION ) STATEMENT [else STATEMENT]
+	if parserLexer.next.tokenType == IF {
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != OPEN_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_PAR")
+		}
+		parserLexer.SelectNext()
+
+		condition := ParseBoolExpression()
+
+		if parserLexer.next.tokenType != CLOSE_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+		}
+		parserLexer.SelectNext()
+
+		thenBranch := ParseStatement()
+
+		if parserLexer.next.tokenType == ELSE {
+			parserLexer.SelectNext()
+			elseBranch := ParseStatement()
+			return NewIfNode(condition, thenBranch, elseBranch)
+		}
+
+		return NewIfNode(condition, thenBranch, nil)
+	}
+
+	// WHILE: while ( BOOLEXPRESSION ) STATEMENT
+	if parserLexer.next.tokenType == WHILE {
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != OPEN_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_PAR")
+		}
+		parserLexer.SelectNext()
+
+		condition := ParseBoolExpression()
+
+		if parserLexer.next.tokenType != CLOSE_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+		}
+		parserLexer.SelectNext()
+
+		body := ParseStatement()
+		return NewWhileNode(condition, body)
+	}
+
+	// Atribuição: IDENTIFIER = BOOLEXPRESSION ;
 	if parserLexer.next.tokenType == IDEN {
 		name := parserLexer.next.value.(string)
 		parserLexer.SelectNext()
@@ -364,7 +588,7 @@ func ParseStatement() Node {
 		}
 		parserLexer.SelectNext()
 
-		expr := ParseExpression()
+		expr := ParseBoolExpression()
 
 		if parserLexer.next.tokenType != END {
 			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;)")
@@ -374,7 +598,7 @@ func ParseStatement() Node {
 		return NewAssignment(NewIdentifier(name), expr)
 	}
 
-	// Impressão: PRINT ( EXPRESSION ) ;
+	// Impressão: PRINT ( BOOLEXPRESSION ) ;
 	if parserLexer.next.tokenType == PRINT {
 		parserLexer.SelectNext()
 
@@ -383,7 +607,7 @@ func ParseStatement() Node {
 		}
 		parserLexer.SelectNext()
 
-		expr := ParseExpression()
+		expr := ParseBoolExpression()
 
 		if parserLexer.next.tokenType != CLOSE_PAR {
 			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
@@ -407,6 +631,45 @@ func ParseStatement() Node {
 	panic("[Parser] Unexpected token in statement: " + parserLexer.next.tokenType)
 }
 
+func ParseBoolExpression() Node {
+	result := ParseBoolTerm()
+
+	for parserLexer.next.tokenType == OR {
+		op := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+		right := ParseBoolTerm()
+		result = NewBinOp(op, result, right)
+	}
+
+	return result
+}
+
+func ParseBoolTerm() Node {
+	result := ParseRelExpression()
+
+	for parserLexer.next.tokenType == AND {
+		op := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+		right := ParseRelExpression()
+		result = NewBinOp(op, result, right)
+	}
+
+	return result
+}
+
+func ParseRelExpression() Node {
+	left := ParseExpression()
+
+	if parserLexer.next.tokenType == EQ || parserLexer.next.tokenType == GT || parserLexer.next.tokenType == LT {
+		op := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+		right := ParseExpression()
+		return NewBinOp(op, left, right)
+	}
+
+	return left
+}
+
 func ParseExpression() Node {
 	result := ParseTerm()
 
@@ -421,23 +684,47 @@ func ParseExpression() Node {
 }
 
 func ParseTerm() Node {
-	result := ParseFactor()
+	result := ParseUnary()
 
 	for parserLexer.next.tokenType == MULT || parserLexer.next.tokenType == DIV {
 		op := parserLexer.next.value.(string)
 		parserLexer.SelectNext()
-		right := ParseFactor()
+		right := ParseUnary()
 		result = NewBinOp(op, result, right)
 	}
 
 	return result
 }
 
+func ParseUnary() Node {
+	if parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS || parserLexer.next.tokenType == NOT {
+		op := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+		operand := ParseUnary()
+		return NewUnOp(op, operand)
+	}
+
+	return ParsePower()
+}
+
+func ParsePower() Node {
+	base := ParseFactor()
+
+	if parserLexer.next.tokenType == POW {
+		op := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+		exponent := ParseUnary()
+		return NewBinOp(op, base, exponent)
+	}
+
+	return base
+}
+
 func ParseFactor() Node {
 	// Parênteses
 	if parserLexer.next.tokenType == OPEN_PAR {
 		parserLexer.SelectNext()
-		result := ParseExpression()
+		result := ParseBoolExpression()
 		if parserLexer.next.tokenType != CLOSE_PAR {
 			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
 		}
@@ -445,12 +732,21 @@ func ParseFactor() Node {
 		return result
 	}
 
-	// Operadores unários
-	if parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS {
-		op := parserLexer.next.value.(string)
+	// Leitura: scanln!()
+	if parserLexer.next.tokenType == READ {
 		parserLexer.SelectNext()
-		operand := ParseFactor()
-		return NewUnOp(op, operand)
+
+		if parserLexer.next.tokenType != OPEN_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_PAR")
+		}
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != CLOSE_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+		}
+		parserLexer.SelectNext()
+
+		return NewReadNode()
 	}
 
 	// Identificador
