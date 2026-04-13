@@ -108,6 +108,22 @@ func defaultValueForType(varType string) interface{} {
 	}
 }
 
+func variableToString(v *Variable) string {
+	switch v.varType {
+	case TYPE_STR:
+		return v.value.(string)
+	case TYPE_I32:
+		return strconv.Itoa(v.value.(int))
+	case TYPE_BOOL:
+		if v.value.(bool) {
+			return "true"
+		}
+		return "false"
+	default:
+		panic("[Semantic] Cannot convert type to string: " + v.varType)
+	}
+}
+
 // ==================== SymbolTable ====================
 
 // SymbolTable armazena variáveis e seus valores
@@ -458,8 +474,8 @@ func (n *BinOp) Evaluate(st *SymbolTable) *Variable {
 		if leftResult.varType == TYPE_I32 && rightResult.varType == TYPE_I32 {
 			return NewVariable(leftResult.value.(int)+rightResult.value.(int), TYPE_I32, false)
 		}
-		if leftResult.varType == TYPE_STR && rightResult.varType == TYPE_STR {
-			return NewVariable(leftResult.value.(string)+rightResult.value.(string), TYPE_STR, false)
+		if leftResult.varType == TYPE_STR || rightResult.varType == TYPE_STR {
+			return NewVariable(variableToString(leftResult)+variableToString(rightResult), TYPE_STR, false)
 		}
 		panic("[Semantic] Type mismatch in '+'")
 	case "-":
@@ -504,15 +520,21 @@ func (n *BinOp) Evaluate(st *SymbolTable) *Variable {
 		}
 		panic("[Semantic] Unsupported type in '=='")
 	case ">":
-		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
-			panic("[Semantic] Operator '>' requires i32 operands")
+		if leftResult.varType == TYPE_I32 && rightResult.varType == TYPE_I32 {
+			return NewVariable(leftResult.value.(int) > rightResult.value.(int), TYPE_BOOL, false)
 		}
-		return NewVariable(leftResult.value.(int) > rightResult.value.(int), TYPE_BOOL, false)
+		if leftResult.varType == TYPE_STR && rightResult.varType == TYPE_STR {
+			return NewVariable(leftResult.value.(string) > rightResult.value.(string), TYPE_BOOL, false)
+		}
+		panic("[Semantic] Operator '>' requires i32 or str operands of same type")
 	case "<":
-		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
-			panic("[Semantic] Operator '<' requires i32 operands")
+		if leftResult.varType == TYPE_I32 && rightResult.varType == TYPE_I32 {
+			return NewVariable(leftResult.value.(int) < rightResult.value.(int), TYPE_BOOL, false)
 		}
-		return NewVariable(leftResult.value.(int) < rightResult.value.(int), TYPE_BOOL, false)
+		if leftResult.varType == TYPE_STR && rightResult.varType == TYPE_STR {
+			return NewVariable(leftResult.value.(string) < rightResult.value.(string), TYPE_BOOL, false)
+		}
+		panic("[Semantic] Operator '<' requires i32 or str operands of same type")
 	}
 	panic("[Semantic] Unknown binary operator: " + n.value)
 }
