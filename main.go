@@ -15,6 +15,8 @@ import (
 // Tipos de token
 const (
 	INT       = "INT"
+	BOOL      = "BOOL"
+	STR       = "STR"
 	PLUS      = "PLUS"
 	MINUS     = "MINUS"
 	XOR       = "XOR"
@@ -32,14 +34,25 @@ const (
 	OPEN_BRA  = "OPEN_BRA"
 	CLOSE_BRA = "CLOSE_BRA"
 	ASSIGN    = "ASSIGN"
+	COLON     = "COLON"
 	END       = "END"
 	IF        = "IF"
 	WHILE     = "WHILE"
 	ELSE      = "ELSE"
+	LET       = "LET"
+	MUT       = "MUT"
+	TYPE      = "TYPE"
 	PRINT     = "PRINT"
 	READ      = "READ"
 	IDEN      = "IDEN"
 	EOF       = "EOF"
+)
+
+const (
+	TYPE_I32  = "i32"
+	TYPE_BOOL = "bool"
+	TYPE_STR  = "str"
+	TYPE_VOID = "void"
 )
 
 // Token representa um token léxico com tipo e valor
@@ -64,12 +77,35 @@ func (p *PrePro) Filter(code string) string {
 
 // Variable representa uma variável com seu valor
 type Variable struct {
-	value int
+	value   interface{}
+	varType string
+	mutable bool
 }
 
 // NewVariable cria uma nova variável
-func NewVariable(value int) *Variable {
-	return &Variable{value: value}
+func NewVariable(value interface{}, varType string, mutable bool) *Variable {
+	return &Variable{value: value, varType: varType, mutable: mutable}
+}
+
+func (v *Variable) Clone() *Variable {
+	return &Variable{value: v.value, varType: v.varType, mutable: v.mutable}
+}
+
+func NewVoidVariable() *Variable {
+	return NewVariable(nil, TYPE_VOID, false)
+}
+
+func defaultValueForType(varType string) interface{} {
+	switch varType {
+	case TYPE_I32:
+		return 0
+	case TYPE_BOOL:
+		return false
+	case TYPE_STR:
+		return ""
+	default:
+		panic("[Semantic] Unknown type: " + varType)
+	}
 }
 
 // ==================== SymbolTable ====================
@@ -87,16 +123,51 @@ func NewSymbolTable() *SymbolTable {
 }
 
 // Get retorna o valor de uma variável
-func (st *SymbolTable) Get(name string) int {
+func (st *SymbolTable) Get(name string) *Variable {
 	if variable, exists := st.table[name]; exists {
-		return variable.value
+		return variable
 	}
 	panic("[Semantic] Variável não definida: " + name)
 }
 
-// Set adiciona ou atualiza uma variável
-func (st *SymbolTable) Set(name string, value int) {
-	st.table[name] = NewVariable(value)
+func (st *SymbolTable) Exists(name string) bool {
+	_, exists := st.table[name]
+	return exists
+}
+
+// CreateVariable declara uma variável na tabela
+func (st *SymbolTable) CreateVariable(name string, varType string, mutable bool) {
+	if st.Exists(name) {
+		panic("[Semantic] Variável já declarada: " + name)
+	}
+	st.table[name] = NewVariable(defaultValueForType(varType), varType, mutable)
+}
+
+// Initialize define o valor inicial no momento da declaração
+func (st *SymbolTable) Initialize(name string, value *Variable) {
+	variable := st.Get(name)
+	if variable.varType != value.varType {
+		panic("[Semantic] Type mismatch na inicialização de " + name)
+	}
+	variable.value = value.value
+}
+
+// Set atualiza uma variável já declarada
+func (st *SymbolTable) Set(name string, value *Variable) {
+	if !st.Exists(name) {
+		panic("[Semantic] Variável não declarada: " + name)
+	}
+
+	variable := st.table[name]
+	if !variable.mutable {
+		panic("[Semantic] Variável imutável: " + name)
+	}
+
+	if variable.varType != value.varType {
+		panic("[Semantic] Type mismatch em atribuição para " + name)
+	}
+
+	variable.value = value.value
 }
 
 // ==================== Lexer ====================
@@ -164,6 +235,9 @@ func (l *Lexer) SelectNext() {
 	} else if currentChar == '=' {
 		l.next = Token{tokenType: ASSIGN, value: "="}
 		l.position++
+	} else if currentChar == ':' {
+		l.next = Token{tokenType: COLON, value: ":"}
+		l.position++
 	} else if currentChar == '>' {
 		l.next = Token{tokenType: GT, value: ">"}
 		l.position++
@@ -185,6 +259,18 @@ func (l *Lexer) SelectNext() {
 	} else if currentChar == ';' {
 		l.next = Token{tokenType: END, value: ";"}
 		l.position++
+	} else if currentChar == '"' {
+		l.position++
+		strValue := ""
+		for l.position < len(l.source) && rune(l.source[l.position]) != '"' {
+			strValue += string(l.source[l.position])
+			l.position++
+		}
+		if l.position >= len(l.source) {
+			panic("[Lexer] Unterminated string literal")
+		}
+		l.position++
+		l.next = Token{tokenType: STR, value: strValue}
 	} else if unicode.IsDigit(currentChar) {
 		numStr := string(currentChar)
 		l.position++
@@ -222,6 +308,16 @@ func (l *Lexer) SelectNext() {
 			l.next = Token{tokenType: WHILE, value: "while"}
 		} else if identStr == "else" {
 			l.next = Token{tokenType: ELSE, value: "else"}
+		} else if identStr == "let" {
+			l.next = Token{tokenType: LET, value: "let"}
+		} else if identStr == "mut" {
+			l.next = Token{tokenType: MUT, value: "mut"}
+		} else if identStr == "true" {
+			l.next = Token{tokenType: BOOL, value: true}
+		} else if identStr == "false" {
+			l.next = Token{tokenType: BOOL, value: false}
+		} else if identStr == TYPE_I32 || identStr == TYPE_BOOL || identStr == TYPE_STR {
+			l.next = Token{tokenType: TYPE, value: identStr}
 		} else if identStr == "println" {
 			// "println" sem "!" é um identificador normal
 			l.next = Token{tokenType: IDEN, value: identStr}
@@ -237,7 +333,7 @@ func (l *Lexer) SelectNext() {
 
 // Node é a interface base para todos os nós da AST
 type Node interface {
-	Evaluate(st *SymbolTable) int
+	Evaluate(st *SymbolTable) *Variable
 }
 
 // IntVal representa um valor inteiro (nó terminal, sem filhos)
@@ -250,8 +346,36 @@ func NewIntVal(value int) *IntVal {
 	return &IntVal{value: value, children: []Node{}}
 }
 
-func (n *IntVal) Evaluate(st *SymbolTable) int {
-	return n.value
+func (n *IntVal) Evaluate(st *SymbolTable) *Variable {
+	return NewVariable(n.value, TYPE_I32, false)
+}
+
+// BoolVal representa um valor booleano
+type BoolVal struct {
+	value    bool
+	children []Node
+}
+
+func NewBoolVal(value bool) *BoolVal {
+	return &BoolVal{value: value, children: []Node{}}
+}
+
+func (n *BoolVal) Evaluate(st *SymbolTable) *Variable {
+	return NewVariable(n.value, TYPE_BOOL, false)
+}
+
+// StringVal representa um valor string
+type StringVal struct {
+	value    string
+	children []Node
+}
+
+func NewStringVal(value string) *StringVal {
+	return &StringVal{value: value, children: []Node{}}
+}
+
+func (n *StringVal) Evaluate(st *SymbolTable) *Variable {
+	return NewVariable(n.value, TYPE_STR, false)
 }
 
 // UnOp representa uma operação unária (1 filho)
@@ -264,17 +388,23 @@ func NewUnOp(operator string, operand Node) *UnOp {
 	return &UnOp{value: operator, children: []Node{operand}}
 }
 
-func (n *UnOp) Evaluate(st *SymbolTable) int {
+func (n *UnOp) Evaluate(st *SymbolTable) *Variable {
 	childResult := n.children[0].Evaluate(st)
 	if n.value == "-" {
-		return -childResult
-	} else if n.value == "+" {
-		return childResult
-	} else if n.value == "!" {
-		if childResult == 0 {
-			return 1
+		if childResult.varType != TYPE_I32 {
+			panic("[Semantic] Unary '-' requires i32")
 		}
-		return 0
+		return NewVariable(-(childResult.value.(int)), TYPE_I32, false)
+	} else if n.value == "+" {
+		if childResult.varType != TYPE_I32 {
+			panic("[Semantic] Unary '+' requires i32")
+		}
+		return NewVariable(childResult.value.(int), TYPE_I32, false)
+	} else if n.value == "!" {
+		if childResult.varType != TYPE_BOOL {
+			panic("[Semantic] Unary '!' requires bool")
+		}
+		return NewVariable(!childResult.value.(bool), TYPE_BOOL, false)
 	}
 	panic("[Semantic] Unknown unary operator: " + n.value)
 }
@@ -289,29 +419,35 @@ func NewBinOp(operator string, left Node, right Node) *BinOp {
 	return &BinOp{value: operator, children: []Node{left, right}}
 }
 
-func (n *BinOp) Evaluate(st *SymbolTable) int {
+func (n *BinOp) Evaluate(st *SymbolTable) *Variable {
 	if n.value == "&&" {
 		leftResult := n.children[0].Evaluate(st)
-		if leftResult == 0 {
-			return 0
+		if leftResult.varType != TYPE_BOOL {
+			panic("[Semantic] Operator && requires bool operands")
+		}
+		if !leftResult.value.(bool) {
+			return NewVariable(false, TYPE_BOOL, false)
 		}
 		rightResult := n.children[1].Evaluate(st)
-		if rightResult != 0 {
-			return 1
+		if rightResult.varType != TYPE_BOOL {
+			panic("[Semantic] Operator && requires bool operands")
 		}
-		return 0
+		return NewVariable(rightResult.value.(bool), TYPE_BOOL, false)
 	}
 
 	if n.value == "||" {
 		leftResult := n.children[0].Evaluate(st)
-		if leftResult != 0 {
-			return 1
+		if leftResult.varType != TYPE_BOOL {
+			panic("[Semantic] Operator || requires bool operands")
+		}
+		if leftResult.value.(bool) {
+			return NewVariable(true, TYPE_BOOL, false)
 		}
 		rightResult := n.children[1].Evaluate(st)
-		if rightResult != 0 {
-			return 1
+		if rightResult.varType != TYPE_BOOL {
+			panic("[Semantic] Operator || requires bool operands")
 		}
-		return 0
+		return NewVariable(rightResult.value.(bool), TYPE_BOOL, false)
 	}
 
 	leftResult := n.children[0].Evaluate(st)
@@ -319,35 +455,64 @@ func (n *BinOp) Evaluate(st *SymbolTable) int {
 
 	switch n.value {
 	case "+":
-		return leftResult + rightResult
+		if leftResult.varType == TYPE_I32 && rightResult.varType == TYPE_I32 {
+			return NewVariable(leftResult.value.(int)+rightResult.value.(int), TYPE_I32, false)
+		}
+		if leftResult.varType == TYPE_STR && rightResult.varType == TYPE_STR {
+			return NewVariable(leftResult.value.(string)+rightResult.value.(string), TYPE_STR, false)
+		}
+		panic("[Semantic] Type mismatch in '+'")
 	case "-":
-		return leftResult - rightResult
+		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
+			panic("[Semantic] Operator '-' requires i32 operands")
+		}
+		return NewVariable(leftResult.value.(int)-rightResult.value.(int), TYPE_I32, false)
 	case "^":
-		return leftResult ^ rightResult
+		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
+			panic("[Semantic] Operator '^' requires i32 operands")
+		}
+		return NewVariable(leftResult.value.(int)^rightResult.value.(int), TYPE_I32, false)
 	case "*":
-		return leftResult * rightResult
+		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
+			panic("[Semantic] Operator '*' requires i32 operands")
+		}
+		return NewVariable(leftResult.value.(int)*rightResult.value.(int), TYPE_I32, false)
 	case "/":
-		if rightResult == 0 {
+		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
+			panic("[Semantic] Operator '/' requires i32 operands")
+		}
+		if rightResult.value.(int) == 0 {
 			panic("[Semantic] Division by zero")
 		}
-		return leftResult / rightResult
+		return NewVariable(leftResult.value.(int)/rightResult.value.(int), TYPE_I32, false)
 	case "**":
-		return int(math.Pow(float64(leftResult), float64(rightResult)))
+		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
+			panic("[Semantic] Operator '**' requires i32 operands")
+		}
+		return NewVariable(int(math.Pow(float64(leftResult.value.(int)), float64(rightResult.value.(int)))), TYPE_I32, false)
 	case "==":
-		if leftResult == rightResult {
-			return 1
+		if leftResult.varType != rightResult.varType {
+			panic("[Semantic] Type mismatch in '=='")
 		}
-		return 0
+		switch leftResult.varType {
+		case TYPE_I32:
+			return NewVariable(leftResult.value.(int) == rightResult.value.(int), TYPE_BOOL, false)
+		case TYPE_BOOL:
+			return NewVariable(leftResult.value.(bool) == rightResult.value.(bool), TYPE_BOOL, false)
+		case TYPE_STR:
+			return NewVariable(leftResult.value.(string) == rightResult.value.(string), TYPE_BOOL, false)
+		}
+		panic("[Semantic] Unsupported type in '=='")
 	case ">":
-		if leftResult > rightResult {
-			return 1
+		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
+			panic("[Semantic] Operator '>' requires i32 operands")
 		}
-		return 0
+		return NewVariable(leftResult.value.(int) > rightResult.value.(int), TYPE_BOOL, false)
 	case "<":
-		if leftResult < rightResult {
-			return 1
+		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
+			panic("[Semantic] Operator '<' requires i32 operands")
 		}
-		return 0
+		return NewVariable(leftResult.value.(int) < rightResult.value.(int), TYPE_BOOL, false)
 	}
 	panic("[Semantic] Unknown binary operator: " + n.value)
 }
@@ -362,8 +527,8 @@ func NewIdentifier(name string) *Identifier {
 	return &Identifier{name: name, children: []Node{}}
 }
 
-func (n *Identifier) Evaluate(st *SymbolTable) int {
-	return st.Get(n.name)
+func (n *Identifier) Evaluate(st *SymbolTable) *Variable {
+	return st.Get(n.name).Clone()
 }
 
 // Print representa a impressão de um valor
@@ -375,10 +540,14 @@ func NewPrint(expr Node) *Print {
 	return &Print{children: []Node{expr}}
 }
 
-func (n *Print) Evaluate(st *SymbolTable) int {
+func (n *Print) Evaluate(st *SymbolTable) *Variable {
 	result := n.children[0].Evaluate(st)
-	fmt.Println(result)
-	return 0
+	if result.varType == TYPE_VOID {
+		fmt.Println("<void>")
+	} else {
+		fmt.Println(result.value)
+	}
+	return NewVoidVariable()
 }
 
 // Assignment representa uma atribuição de variável
@@ -390,11 +559,46 @@ func NewAssignment(identifier Node, expr Node) *Assignment {
 	return &Assignment{children: []Node{identifier, expr}}
 }
 
-func (n *Assignment) Evaluate(st *SymbolTable) int {
+func (n *Assignment) Evaluate(st *SymbolTable) *Variable {
 	identNode := n.children[0].(*Identifier)
 	value := n.children[1].Evaluate(st)
+
+	if !st.Exists(identNode.name) {
+		// Compatibilidade com programas antigos: primeira atribuição declara implicitamente.
+		st.CreateVariable(identNode.name, value.varType, true)
+		st.Initialize(identNode.name, value)
+		return NewVoidVariable()
+	}
+
 	st.Set(identNode.name, value)
-	return 0
+	return NewVoidVariable()
+}
+
+// VarDec representa declaração de variável com tipo
+type VarDec struct {
+	value    string
+	mutable  bool
+	children []Node
+}
+
+func NewVarDec(varType string, mutable bool, identifier Node, expr Node) *VarDec {
+	children := []Node{identifier}
+	if expr != nil {
+		children = append(children, expr)
+	}
+	return &VarDec{value: varType, mutable: mutable, children: children}
+}
+
+func (n *VarDec) Evaluate(st *SymbolTable) *Variable {
+	identNode := n.children[0].(*Identifier)
+	st.CreateVariable(identNode.name, n.value, n.mutable)
+
+	if len(n.children) == 2 {
+		initialValue := n.children[1].Evaluate(st)
+		st.Initialize(identNode.name, initialValue)
+	}
+
+	return NewVoidVariable()
 }
 
 // IfNode representa uma estrutura condicional if/else
@@ -410,14 +614,17 @@ func NewIfNode(condition Node, thenBranch Node, elseBranch Node) *IfNode {
 	return &IfNode{children: children}
 }
 
-func (n *IfNode) Evaluate(st *SymbolTable) int {
+func (n *IfNode) Evaluate(st *SymbolTable) *Variable {
 	condition := n.children[0].Evaluate(st)
-	if condition != 0 {
+	if condition.varType != TYPE_BOOL {
+		panic("[Semantic] if condition must be bool")
+	}
+	if condition.value.(bool) {
 		n.children[1].Evaluate(st)
 	} else if len(n.children) == 3 {
 		n.children[2].Evaluate(st)
 	}
-	return 0
+	return NewVoidVariable()
 }
 
 // WhileNode representa uma estrutura de repetição while
@@ -429,11 +636,18 @@ func NewWhileNode(condition Node, body Node) *WhileNode {
 	return &WhileNode{children: []Node{condition, body}}
 }
 
-func (n *WhileNode) Evaluate(st *SymbolTable) int {
-	for n.children[0].Evaluate(st) != 0 {
+func (n *WhileNode) Evaluate(st *SymbolTable) *Variable {
+	for {
+		condition := n.children[0].Evaluate(st)
+		if condition.varType != TYPE_BOOL {
+			panic("[Semantic] while condition must be bool")
+		}
+		if !condition.value.(bool) {
+			break
+		}
 		n.children[1].Evaluate(st)
 	}
-	return 0
+	return NewVoidVariable()
 }
 
 // ReadNode representa a leitura de inteiro do terminal
@@ -445,13 +659,13 @@ func NewReadNode() *ReadNode {
 	return &ReadNode{children: []Node{}}
 }
 
-func (n *ReadNode) Evaluate(st *SymbolTable) int {
+func (n *ReadNode) Evaluate(st *SymbolTable) *Variable {
 	var value int
 	_, err := fmt.Fscan(os.Stdin, &value)
 	if err != nil {
 		panic("[Semantic] Failed to read integer input")
 	}
-	return value
+	return NewVariable(value, TYPE_I32, false)
 }
 
 // Block representa um bloco de instruções
@@ -467,11 +681,11 @@ func (b *Block) AddChild(node Node) {
 	b.children = append(b.children, node)
 }
 
-func (n *Block) Evaluate(st *SymbolTable) int {
+func (n *Block) Evaluate(st *SymbolTable) *Variable {
 	for _, child := range n.children {
 		child.Evaluate(st)
 	}
-	return 0
+	return NewVoidVariable()
 }
 
 // NoOp representa uma operação vazia (dummy)
@@ -483,8 +697,8 @@ func NewNoOp() *NoOp {
 	return &NoOp{children: []Node{}}
 }
 
-func (n *NoOp) Evaluate(st *SymbolTable) int {
-	return 0
+func (n *NoOp) Evaluate(st *SymbolTable) *Variable {
+	return NewVoidVariable()
 }
 
 // ==================== Parser ====================
@@ -529,6 +743,47 @@ func ParseStatement() Node {
 	// Bloco: { STATEMENT* }
 	if parserLexer.next.tokenType == OPEN_BRA {
 		return ParseBlock()
+	}
+
+	// Declaração: let [mut] IDENTIFIER : TYPE [= BOOLEXPRESSION] ;
+	if parserLexer.next.tokenType == LET {
+		parserLexer.SelectNext()
+
+		isMutable := false
+		if parserLexer.next.tokenType == MUT {
+			isMutable = true
+			parserLexer.SelectNext()
+		}
+
+		if parserLexer.next.tokenType != IDEN {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected IDEN")
+		}
+		name := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != COLON {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected COLON")
+		}
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != TYPE {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected TYPE")
+		}
+		declaredType := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+
+		var expr Node = nil
+		if parserLexer.next.tokenType == ASSIGN {
+			parserLexer.SelectNext()
+			expr = ParseBoolExpression()
+		}
+
+		if parserLexer.next.tokenType != END {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;) ")
+		}
+		parserLexer.SelectNext()
+
+		return NewVarDec(declaredType, isMutable, NewIdentifier(name), expr)
 	}
 
 	// IF: if ( BOOLEXPRESSION ) STATEMENT [else STATEMENT]
@@ -747,6 +1002,20 @@ func ParseFactor() Node {
 		parserLexer.SelectNext()
 
 		return NewReadNode()
+	}
+
+	// Booleano
+	if parserLexer.next.tokenType == BOOL {
+		value := parserLexer.next.value.(bool)
+		parserLexer.SelectNext()
+		return NewBoolVal(value)
+	}
+
+	// String
+	if parserLexer.next.tokenType == STR {
+		value := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+		return NewStringVal(value)
 	}
 
 	// Identificador
