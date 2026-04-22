@@ -82,9 +82,9 @@ func (c *Code) Dump(filename string) {
   scan_int: dd 0; 32-bits integer
 
 section .text
-  extern printf ; usar _printf para Windows
-  extern scanf ; usar _scanf para Windows
-  ; extern _ExitProcess@4 ; usar para Windows
+  extern printf ; usar printf
+  extern scanf ; usar scanf
+  extern exit ; exit function
   global _start ; início do programa
 
 _start:
@@ -99,13 +99,9 @@ _start:
   mov esp, ebp ; reestabelece a pilha
   pop ebp
 
-  ; chamada da interrupcao de saida (Linux)
-  mov eax, 1   
-  xor ebx, ebx 
-  int 0x80     
-  ; Para Windows:
-  ; push dword 0        
-  ; call _ExitProcess@4`
+  ; chamada de exit(0)
+  push 0
+  call exit`
 
 	file, err := os.Create(filename)
 	if err != nil {
@@ -674,10 +670,16 @@ func (n *BinOp) Generate(st *SymbolTable) {
 	case "+":
 		codeGenerator.Append("  add eax, ecx")
 	case "-":
+		codeGenerator.Append("  mov edx, ecx")
+		codeGenerator.Append("  mov ecx, eax")
+		codeGenerator.Append("  mov eax, edx")
 		codeGenerator.Append("  sub eax, ecx")
 	case "*":
 		codeGenerator.Append("  imul ecx")
 	case "/":
+		codeGenerator.Append("  mov edx, eax")
+		codeGenerator.Append("  mov eax, ecx")
+		codeGenerator.Append("  mov ecx, edx")
 		codeGenerator.Append("  cdq")
 		codeGenerator.Append("  idiv ecx")
 	case "^":
@@ -688,12 +690,16 @@ func (n *BinOp) Generate(st *SymbolTable) {
 		codeGenerator.Append("  mov ecx, 1")
 		codeGenerator.Append("  cmove eax, ecx")
 	case ">":
-		codeGenerator.Append("  cmp ecx, eax")
+		codeGenerator.Append("  mov edx, eax")
+		codeGenerator.Append("  mov eax, ecx")
+		codeGenerator.Append("  cmp eax, edx")
 		codeGenerator.Append("  mov eax, 0")
 		codeGenerator.Append("  mov ecx, 1")
-		codeGenerator.Append("  cmovl eax, ecx")
+		codeGenerator.Append("  cmovg eax, ecx")
 	case "<":
-		codeGenerator.Append("  cmp eax, ecx")
+		codeGenerator.Append("  mov edx, eax")
+		codeGenerator.Append("  mov eax, ecx")
+		codeGenerator.Append("  cmp eax, edx")
 		codeGenerator.Append("  mov eax, 0")
 		codeGenerator.Append("  mov ecx, 1")
 		codeGenerator.Append("  cmovl eax, ecx")
@@ -750,6 +756,13 @@ func (n *Print) Evaluate(st *SymbolTable) *Variable {
 	result := n.children[0].Evaluate(st)
 	if result.varType == TYPE_VOID {
 		fmt.Println("<void>")
+	} else if result.varType == TYPE_BOOL {
+		// Converte booleano para 0/1
+		if result.value.(bool) {
+			fmt.Println(1)
+		} else {
+			fmt.Println(0)
+		}
 	} else {
 		fmt.Println(result.value)
 	}
