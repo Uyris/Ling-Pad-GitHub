@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"unicode"
@@ -61,6 +62,64 @@ type Token struct {
 	value     interface{}
 }
 
+// ==================== Code ====================
+
+// Code armazena e gerencia o código assembly gerado
+type Code struct{}
+
+var codeInstructions []string
+
+// Append adiciona uma instrução assembly ao arquivo de saída
+func (c *Code) Append(instruction string) {
+	codeInstructions = append(codeInstructions, instruction)
+}
+
+// Dump escreve o código assembly em um arquivo
+func (c *Code) Dump(filename string) {
+	header := `section .data
+  format_out: db "%d", 10, 0 ; format do printf
+  format_in: db "%d", 0 ; format do scanf
+  scan_int: dd 0; 32-bits integer
+
+section .text
+  extern printf ; usar _printf para Windows
+  extern scanf ; usar _scanf para Windows
+  ; extern _ExitProcess@4 ; usar para Windows
+  global _start ; início do programa
+
+_start:
+  push ebp ; guarda o EBP
+  mov ebp, esp ; zera a pilha
+
+  ; aqui começa o codigo gerado:`
+
+	footer := `
+  ; aqui termina o código gerado
+
+  mov esp, ebp ; reestabelece a pilha
+  pop ebp
+
+  ; chamada da interrupcao de saida (Linux)
+  mov eax, 1   
+  xor ebx, ebx 
+  int 0x80     
+  ; Para Windows:
+  ; push dword 0        
+  ; call _ExitProcess@4`
+
+	file, err := os.Create(filename)
+	if err != nil {
+		panic("[Code] Erro ao criar arquivo: " + filename)
+	}
+	defer file.Close()
+
+	file.WriteString(header + "\n")
+	for _, instr := range codeInstructions {
+		file.WriteString(instr + "\n")
+	}
+	file.WriteString(footer + "\n")
+}
+
 // ==================== PrePro ====================
 
 // PrePro realiza o pré-processamento do código-fonte
@@ -75,20 +134,21 @@ func (p *PrePro) Filter(code string) string {
 
 // ==================== Variable ====================
 
-// Variable representa uma variável com seu valor
+// Variable representa uma variável com seu valor e deslocamento na pilha
 type Variable struct {
 	value   interface{}
 	varType string
 	mutable bool
+	shift   int // Deslocamento relativo ao EBP na pilha (em bytes)
 }
 
 // NewVariable cria uma nova variável
 func NewVariable(value interface{}, varType string, mutable bool) *Variable {
-	return &Variable{value: value, varType: varType, mutable: mutable}
+	return &Variable{value: value, varType: varType, mutable: mutable, shift: 0}
 }
 
 func (v *Variable) Clone() *Variable {
-	return &Variable{value: v.value, varType: v.varType, mutable: v.mutable}
+	return &Variable{value: v.value, varType: v.varType, mutable: v.mutable, shift: v.shift}
 }
 
 func NewVoidVariable() *Variable {
@@ -128,13 +188,16 @@ func variableToString(v *Variable) string {
 
 // SymbolTable armazena variáveis e seus valores
 type SymbolTable struct {
-	table map[string]*Variable
+	table         map[string]*Variable
+	nextShift     int // Rastreia o próximo deslocamento na pilha
+	variableCount int // Número de variáveis declaradas
 }
 
 // NewSymbolTable cria uma nova tabela de símbolos
 func NewSymbolTable() *SymbolTable {
 	return &SymbolTable{
-		table: make(map[string]*Variable),
+		table:     make(map[string]*Variable),
+		nextShift: 4, // Primeira variável em [EBP-4]
 	}
 }
 
@@ -156,7 +219,11 @@ func (st *SymbolTable) CreateVariable(name string, varType string, mutable bool)
 	if st.Exists(name) {
 		panic("[Semantic] Variável já declarada: " + name)
 	}
-	st.table[name] = NewVariable(defaultValueForType(varType), varType, mutable)
+	variable := NewVariable(defaultValueForType(varType), varType, mutable)
+	variable.shift = st.nextShift // Atribui o shift atual
+	st.table[name] = variable
+	st.nextShift += 4 // Próxima variável será 4 bytes adiante
+	st.variableCount++
 }
 
 // Initialize define o valor inicial no momento da declaração
@@ -345,63 +412,97 @@ func (l *Lexer) SelectNext() {
 	}
 }
 
+// ==================== Code Generator ====================
+
+// Variáveis de pacote para geração de código
+var codeGenerator = &Code{}
+var nextNodeID int = 0
+
+// GetNextNodeID retorna e incrementa o ID único para nós
+func GetNextNodeID() int {
+	nextNodeID++
+	return nextNodeID
+}
+
 // ==================== AST Nodes ====================
 
 // Node é a interface base para todos os nós da AST
 type Node interface {
 	Evaluate(st *SymbolTable) *Variable
+	Generate(st *SymbolTable) // Novo método para geração de código
 }
 
 // IntVal representa um valor inteiro (nó terminal, sem filhos)
 type IntVal struct {
 	value    int
 	children []Node
+	id       int
 }
 
 func NewIntVal(value int) *IntVal {
-	return &IntVal{value: value, children: []Node{}}
+	return &IntVal{value: value, children: []Node{}, id: GetNextNodeID()}
 }
 
 func (n *IntVal) Evaluate(st *SymbolTable) *Variable {
 	return NewVariable(n.value, TYPE_I32, false)
 }
 
+func (n *IntVal) Generate(st *SymbolTable) {
+	codeGenerator.Append(fmt.Sprintf("  mov eax, %d ; IntVal %d", n.value, n.id))
+}
+
 // BoolVal representa um valor booleano
 type BoolVal struct {
 	value    bool
 	children []Node
+	id       int
 }
 
 func NewBoolVal(value bool) *BoolVal {
-	return &BoolVal{value: value, children: []Node{}}
+	return &BoolVal{value: value, children: []Node{}, id: GetNextNodeID()}
 }
 
 func (n *BoolVal) Evaluate(st *SymbolTable) *Variable {
 	return NewVariable(n.value, TYPE_BOOL, false)
 }
 
+func (n *BoolVal) Generate(st *SymbolTable) {
+	val := 0
+	if n.value {
+		val = 1
+	}
+	codeGenerator.Append(fmt.Sprintf("  mov eax, %d ; BoolVal %d", val, n.id))
+}
+
 // StringVal representa um valor string
 type StringVal struct {
 	value    string
 	children []Node
+	id       int
 }
 
 func NewStringVal(value string) *StringVal {
-	return &StringVal{value: value, children: []Node{}}
+	return &StringVal{value: value, children: []Node{}, id: GetNextNodeID()}
 }
 
 func (n *StringVal) Evaluate(st *SymbolTable) *Variable {
 	return NewVariable(n.value, TYPE_STR, false)
 }
 
+func (n *StringVal) Generate(st *SymbolTable) {
+	// Strings não são geradas em assembly
+	// Nó dummy para compatibilidade
+}
+
 // UnOp representa uma operação unária (1 filho)
 type UnOp struct {
 	value    string
 	children []Node
+	id       int
 }
 
 func NewUnOp(operator string, operand Node) *UnOp {
-	return &UnOp{value: operator, children: []Node{operand}}
+	return &UnOp{value: operator, children: []Node{operand}, id: GetNextNodeID()}
 }
 
 func (n *UnOp) Evaluate(st *SymbolTable) *Variable {
@@ -425,14 +526,33 @@ func (n *UnOp) Evaluate(st *SymbolTable) *Variable {
 	panic("[Semantic] Unknown unary operator: " + n.value)
 }
 
+func (n *UnOp) Generate(st *SymbolTable) {
+	// Gera código para o operando (resultado em EAX)
+	n.children[0].Generate(st)
+
+	// Aplica a operação unária
+	switch n.value {
+	case "-":
+		codeGenerator.Append("  neg eax ; UnOp negation")
+	case "+":
+		// Nada a fazer, mantém EAX como está
+	case "!":
+		codeGenerator.Append("  cmp eax, 0")
+		codeGenerator.Append("  mov eax, 0")
+		codeGenerator.Append("  mov ecx, 1")
+		codeGenerator.Append("  cmove eax, ecx ; UnOp not")
+	}
+}
+
 // BinOp representa uma operação binária (2 filhos)
 type BinOp struct {
 	value    string
 	children []Node
+	id       int
 }
 
 func NewBinOp(operator string, left Node, right Node) *BinOp {
-	return &BinOp{value: operator, children: []Node{left, right}}
+	return &BinOp{value: operator, children: []Node{left, right}, id: GetNextNodeID()}
 }
 
 func (n *BinOp) Evaluate(st *SymbolTable) *Variable {
@@ -539,27 +659,91 @@ func (n *BinOp) Evaluate(st *SymbolTable) *Variable {
 	panic("[Semantic] Unknown binary operator: " + n.value)
 }
 
+func (n *BinOp) Generate(st *SymbolTable) {
+	// Gera código para o operando esquerdo
+	n.children[0].Generate(st)
+	// Empilha o resultado
+	codeGenerator.Append("  push eax ; BinOp left operand")
+
+	// Gera código para o operando direito
+	n.children[1].Generate(st)
+	// Desempilha e realiza a operação
+	codeGenerator.Append("  pop ecx ; BinOp right operand")
+
+	switch n.value {
+	case "+":
+		codeGenerator.Append("  add eax, ecx")
+	case "-":
+		codeGenerator.Append("  sub eax, ecx")
+	case "*":
+		codeGenerator.Append("  imul ecx")
+	case "/":
+		codeGenerator.Append("  cdq")
+		codeGenerator.Append("  idiv ecx")
+	case "^":
+		codeGenerator.Append("  xor eax, ecx")
+	case "==":
+		codeGenerator.Append("  cmp eax, ecx")
+		codeGenerator.Append("  mov eax, 0")
+		codeGenerator.Append("  mov ecx, 1")
+		codeGenerator.Append("  cmove eax, ecx")
+	case ">":
+		codeGenerator.Append("  cmp ecx, eax")
+		codeGenerator.Append("  mov eax, 0")
+		codeGenerator.Append("  mov ecx, 1")
+		codeGenerator.Append("  cmovl eax, ecx")
+	case "<":
+		codeGenerator.Append("  cmp eax, ecx")
+		codeGenerator.Append("  mov eax, 0")
+		codeGenerator.Append("  mov ecx, 1")
+		codeGenerator.Append("  cmovl eax, ecx")
+	case "&&":
+		codeGenerator.Append("  and eax, ecx")
+	case "||":
+		codeGenerator.Append("  or eax, ecx")
+	case "**":
+		// Exponenciação requer função auxiliar
+		codeGenerator.Append("  mov ebx, ecx ; base em EBX")
+		codeGenerator.Append("  mov ecx, eax ; expoente em ECX")
+		codeGenerator.Append("  mov eax, 1 ; resultado = 1")
+		codeGenerator.Append("  cmp ecx, 0")
+		codeGenerator.Append("  je pow_end")
+		codeGenerator.Append("pow_loop:")
+		codeGenerator.Append("  imul eax, ebx")
+		codeGenerator.Append("  dec ecx")
+		codeGenerator.Append("  jne pow_loop")
+		codeGenerator.Append("pow_end:")
+	}
+}
+
 // Identifier representa uma variável
 type Identifier struct {
 	name     string
 	children []Node
+	id       int
 }
 
 func NewIdentifier(name string) *Identifier {
-	return &Identifier{name: name, children: []Node{}}
+	return &Identifier{name: name, children: []Node{}, id: GetNextNodeID()}
 }
 
 func (n *Identifier) Evaluate(st *SymbolTable) *Variable {
 	return st.Get(n.name).Clone()
 }
 
+func (n *Identifier) Generate(st *SymbolTable) {
+	variable := st.Get(n.name)
+	codeGenerator.Append(fmt.Sprintf("  mov eax, [ebp-%d] ; Identifier %s", variable.shift, n.name))
+}
+
 // Print representa a impressão de um valor
 type Print struct {
 	children []Node
+	id       int
 }
 
 func NewPrint(expr Node) *Print {
-	return &Print{children: []Node{expr}}
+	return &Print{children: []Node{expr}, id: GetNextNodeID()}
 }
 
 func (n *Print) Evaluate(st *SymbolTable) *Variable {
@@ -572,13 +756,24 @@ func (n *Print) Evaluate(st *SymbolTable) *Variable {
 	return NewVoidVariable()
 }
 
+func (n *Print) Generate(st *SymbolTable) {
+	// Gera código para calcular a expressão
+	n.children[0].Generate(st)
+	// EAX contém o valor a imprimir
+	codeGenerator.Append("  push eax ; Push valor a imprimir")
+	codeGenerator.Append("  push format_out ; Push formato")
+	codeGenerator.Append("  call printf")
+	codeGenerator.Append("  add esp, 8 ; Remove argumentos")
+}
+
 // Assignment representa uma atribuição de variável
 type Assignment struct {
 	children []Node
+	id       int
 }
 
 func NewAssignment(identifier Node, expr Node) *Assignment {
-	return &Assignment{children: []Node{identifier, expr}}
+	return &Assignment{children: []Node{identifier, expr}, id: GetNextNodeID()}
 }
 
 func (n *Assignment) Evaluate(st *SymbolTable) *Variable {
@@ -596,11 +791,21 @@ func (n *Assignment) Evaluate(st *SymbolTable) *Variable {
 	return NewVoidVariable()
 }
 
+func (n *Assignment) Generate(st *SymbolTable) {
+	identNode := n.children[0].(*Identifier)
+	// Gera código para a expressão
+	n.children[1].Generate(st)
+	// EAX contém o resultado
+	variable := st.Get(identNode.name)
+	codeGenerator.Append(fmt.Sprintf("  mov [ebp-%d], eax ; Assignment %s", variable.shift, identNode.name))
+}
+
 // VarDec representa declaração de variável com tipo
 type VarDec struct {
 	value    string
 	mutable  bool
 	children []Node
+	id       int
 }
 
 func NewVarDec(varType string, mutable bool, identifier Node, expr Node) *VarDec {
@@ -608,7 +813,7 @@ func NewVarDec(varType string, mutable bool, identifier Node, expr Node) *VarDec
 	if expr != nil {
 		children = append(children, expr)
 	}
-	return &VarDec{value: varType, mutable: mutable, children: children}
+	return &VarDec{value: varType, mutable: mutable, children: children, id: GetNextNodeID()}
 }
 
 func (n *VarDec) Evaluate(st *SymbolTable) *Variable {
@@ -623,9 +828,29 @@ func (n *VarDec) Evaluate(st *SymbolTable) *Variable {
 	return NewVoidVariable()
 }
 
+func (n *VarDec) Generate(st *SymbolTable) {
+	identNode := n.children[0].(*Identifier)
+
+	// Primeiro, cria a variável na tabela de símbolos
+	if !st.Exists(identNode.name) {
+		st.CreateVariable(identNode.name, n.value, n.mutable)
+	}
+
+	variable := st.Get(identNode.name)
+	codeGenerator.Append(fmt.Sprintf("  sub esp, 4 ; var %s int [EBP-%d]", identNode.name, variable.shift))
+
+	if len(n.children) == 2 {
+		// Gera código para a inicialização
+		n.children[1].Generate(st)
+		// EAX contém o valor
+		codeGenerator.Append(fmt.Sprintf("  mov [ebp-%d], eax ; Initialize %s", variable.shift, identNode.name))
+	}
+}
+
 // IfNode representa uma estrutura condicional if/else
 type IfNode struct {
 	children []Node
+	id       int
 }
 
 func NewIfNode(condition Node, thenBranch Node, elseBranch Node) *IfNode {
@@ -633,7 +858,7 @@ func NewIfNode(condition Node, thenBranch Node, elseBranch Node) *IfNode {
 	if elseBranch != nil {
 		children = append(children, elseBranch)
 	}
-	return &IfNode{children: children}
+	return &IfNode{children: children, id: GetNextNodeID()}
 }
 
 func (n *IfNode) Evaluate(st *SymbolTable) *Variable {
@@ -649,13 +874,38 @@ func (n *IfNode) Evaluate(st *SymbolTable) *Variable {
 	return NewVoidVariable()
 }
 
+func (n *IfNode) Generate(st *SymbolTable) {
+	else_label := fmt.Sprintf("else_%d", n.id)
+	exit_label := fmt.Sprintf("exit_%d", n.id)
+
+	// Gera código para a condição
+	n.children[0].Generate(st)
+	// EAX contém o resultado da condição
+	codeGenerator.Append("  cmp eax, 0 ; if condition")
+	codeGenerator.Append(fmt.Sprintf("  je %s", else_label))
+
+	// Bloco then
+	n.children[1].Generate(st)
+	codeGenerator.Append(fmt.Sprintf("  jmp %s", exit_label))
+
+	// Label else
+	codeGenerator.Append(fmt.Sprintf("%s:", else_label))
+	if len(n.children) == 3 {
+		n.children[2].Generate(st)
+	}
+
+	// Label exit
+	codeGenerator.Append(fmt.Sprintf("%s:", exit_label))
+}
+
 // WhileNode representa uma estrutura de repetição while
 type WhileNode struct {
 	children []Node
+	id       int
 }
 
 func NewWhileNode(condition Node, body Node) *WhileNode {
-	return &WhileNode{children: []Node{condition, body}}
+	return &WhileNode{children: []Node{condition, body}, id: GetNextNodeID()}
 }
 
 func (n *WhileNode) Evaluate(st *SymbolTable) *Variable {
@@ -672,13 +922,37 @@ func (n *WhileNode) Evaluate(st *SymbolTable) *Variable {
 	return NewVoidVariable()
 }
 
+func (n *WhileNode) Generate(st *SymbolTable) {
+	loop_label := fmt.Sprintf("loop_%d", n.id)
+	exit_label := fmt.Sprintf("exit_%d", n.id)
+
+	// Label do loop
+	codeGenerator.Append(fmt.Sprintf("%s:", loop_label))
+
+	// Gera código para a condição
+	n.children[0].Generate(st)
+	// EAX contém o resultado da condição
+	codeGenerator.Append("  cmp eax, 0 ; while condition")
+	codeGenerator.Append(fmt.Sprintf("  je %s", exit_label))
+
+	// Corpo do loop
+	n.children[1].Generate(st)
+
+	// Pula de volta para o teste
+	codeGenerator.Append(fmt.Sprintf("  jmp %s", loop_label))
+
+	// Label de saída
+	codeGenerator.Append(fmt.Sprintf("%s:", exit_label))
+}
+
 // ReadNode representa a leitura de inteiro do terminal
 type ReadNode struct {
 	children []Node
+	id       int
 }
 
 func NewReadNode() *ReadNode {
-	return &ReadNode{children: []Node{}}
+	return &ReadNode{children: []Node{}, id: GetNextNodeID()}
 }
 
 func (n *ReadNode) Evaluate(st *SymbolTable) *Variable {
@@ -690,13 +964,22 @@ func (n *ReadNode) Evaluate(st *SymbolTable) *Variable {
 	return NewVariable(value, TYPE_I32, false)
 }
 
+func (n *ReadNode) Generate(st *SymbolTable) {
+	codeGenerator.Append("  push scan_int ; endereço de memória de suporte")
+	codeGenerator.Append("  push format_in ; formato de entrada (int)")
+	codeGenerator.Append("  call scanf")
+	codeGenerator.Append("  add esp, 8 ; Remove os argumentos da pilha")
+	codeGenerator.Append("  mov eax, dword [scan_int] ; retorna o valor lido em EAX")
+}
+
 // Block representa um bloco de instruções
 type Block struct {
 	children []Node
+	id       int
 }
 
 func NewBlock() *Block {
-	return &Block{children: []Node{}}
+	return &Block{children: []Node{}, id: GetNextNodeID()}
 }
 
 func (b *Block) AddChild(node Node) {
@@ -710,17 +993,28 @@ func (n *Block) Evaluate(st *SymbolTable) *Variable {
 	return NewVoidVariable()
 }
 
+func (n *Block) Generate(st *SymbolTable) {
+	for _, child := range n.children {
+		child.Generate(st)
+	}
+}
+
 // NoOp representa uma operação vazia (dummy)
 type NoOp struct {
 	children []Node
+	id       int
 }
 
 func NewNoOp() *NoOp {
-	return &NoOp{children: []Node{}}
+	return &NoOp{children: []Node{}, id: GetNextNodeID()}
 }
 
 func (n *NoOp) Evaluate(st *SymbolTable) *Variable {
 	return NewVoidVariable()
+}
+
+func (n *NoOp) Generate(st *SymbolTable) {
+	// Nada a gerar
 }
 
 // ==================== Parser ====================
@@ -1097,7 +1391,20 @@ func main() {
 	// Análise sintática
 	ast := Run(code)
 
-	// Criar tabela de símbolos e executar
+	// Criar tabela de símbolos (apenas para geração)
 	st := NewSymbolTable()
-	ast.Evaluate(st)
+
+	// Reinicializa instruções e ID para geração
+	codeInstructions = []string{}
+	nextNodeID = 0
+
+	// Gera o código assembly
+	ast.Generate(st)
+
+	// Gera o nome do arquivo de saída (.asm)
+	outputFilename := filename[:len(filename)-len(filepath.Ext(filename))] + ".asm"
+
+	// Escreve o arquivo assembly
+	codeGenerator.Dump(outputFilename)
+	fmt.Println("[Main] Arquivo gerado: " + outputFilename)
 }
