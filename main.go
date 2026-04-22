@@ -1391,15 +1391,19 @@ func main() {
 	// Análise sintática
 	ast := Run(code)
 
-	// Criar tabela de símbolos (apenas para geração)
+	// EXECUÇÃO: Criar tabela de símbolos e executar
 	st := NewSymbolTable()
+	ast.Evaluate(st)
 
-	// Reinicializa instruções e ID para geração
+	// GERAÇÃO DE CÓDIGO: Reinicializa para gerar assembly
 	codeInstructions = []string{}
 	nextNodeID = 0
 
+	// Cria nova tabela de símbolos para geração
+	stGen := NewSymbolTable()
+
 	// Gera o código assembly
-	ast.Generate(st)
+	ast.Generate(stGen)
 
 	// Gera o nome do arquivo de saída (.asm)
 	outputFilename := filename[:len(filename)-len(filepath.Ext(filename))] + ".asm"
