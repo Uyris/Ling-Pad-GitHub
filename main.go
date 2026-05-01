@@ -19,6 +19,7 @@ const (
 	DIV       = "DIV"
 	OPEN_PAR  = "OPEN_PAR"
 	CLOSE_PAR = "CLOSE_PAR"
+	FACT      = "FACT"
 	EOF       = "EOF"
 )
 
@@ -93,6 +94,9 @@ func (l *Lexer) SelectNext() {
 			panic("[Lexer] Erro ao converter número: " + numStr)
 		}
 		l.next = Token{tokenType: INT, value: num}
+	} else if currentChar == '!' {
+		l.next = Token{tokenType: FACT, value: "!"}
+		l.position++
 	} else {
 		panic("[Lexer] Invalid Symbol: " + string(currentChar))
 	}
@@ -111,6 +115,11 @@ type IntVal struct {
 	children []Node
 }
 
+type Fact struct {
+	value    int
+	children []Node
+}
+
 func NewIntVal(value int) *IntVal {
 	return &IntVal{value: value, children: []Node{}}
 }
@@ -123,6 +132,20 @@ func (n *IntVal) Evaluate() int {
 type UnOp struct {
 	value    string
 	children []Node
+}
+func NewFact(value int) *Fact {
+	return &Fact{value: value, children: []Node{}}
+}
+
+func (n *Fact) Evaluate() int {
+	if n.value < 0 {
+		panic("[Semantic] Factorial is not defined for negative numbers: " + strconv.Itoa(n.value))
+	}
+	result := 1
+	for i := 2; i <= n.value; i++ {
+		result *= i
+	}
+	return result
 }
 
 func NewUnOp(operator string, operand Node) *UnOp {
@@ -206,6 +229,8 @@ func ParseTerm() Node {
 }
 
 func ParseFactor() Node {
+	var result Node
+
 	// Parênteses
 	if parserLexer.next.tokenType == OPEN_PAR {
 		parserLexer.SelectNext()
@@ -214,25 +239,30 @@ func ParseFactor() Node {
 			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
 		}
 		parserLexer.SelectNext()
-		return result
-	}
+		return result	
+		
+	} else if parserLexer.next.tokenType == INT { // Número inteiro
+		value := parserLexer.next.value.(int)
+		parserLexer.SelectNext()
+		result = NewIntVal(value)
 
-	// Operadores unários
-	if parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS {
+	} else if parserLexer.next.tokenType == PLUS || parserLexer.next.tokenType == MINUS { // Operador unário
 		op := parserLexer.next.value.(string)
 		parserLexer.SelectNext()
 		operand := ParseFactor()
 		return NewUnOp(op, operand)
+
+	} else { 
+		panic("[Parser] Unexpected token in factor: " + parserLexer.next.tokenType)
 	}
 
-	// Número
-	if parserLexer.next.tokenType == INT {
-		value := parserLexer.next.value.(int)
+	if parserLexer.next.tokenType == FACT { // Fatorial
 		parserLexer.SelectNext()
-		return NewIntVal(value)
+		result = NewFact(result.Evaluate())
 	}
 
-	panic("[Parser] Unexpected token in factor: " + parserLexer.next.tokenType)
+	return result;
+
 }
 
 // Run é o ponto de entrada do Parser. Retorna a raiz da AST.
