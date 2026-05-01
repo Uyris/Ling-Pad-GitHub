@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -25,6 +26,8 @@ const (
 	END       = "END"
 	PRINT     = "PRINT"
 	IDEN      = "IDEN"
+	CONST     = "CONST"
+	LET       = "LET"
 	EOF       = "EOF"
 )
 
@@ -42,20 +45,47 @@ type PrePro struct{}
 // Filter remove comentários inline do código
 func (p *PrePro) Filter(code string) string {
 	// Remove tudo entre "//" e "\n", mantendo o "\n"
-	re := regexp.MustCompile(`//[^\n]*`)
-	return re.ReplaceAllString(code, "")
+	reComment := regexp.MustCompile(`//[^\n]*`)
+	code = reComment.ReplaceAllString(code, "")
+
+	// Processa constantes: const NAME = VALUE;
+	reConst := regexp.MustCompile(`const\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(\d+)\s*;`)
+	matches := reConst.FindAllStringSubmatch(code, -1)
+
+	for _, match := range matches {
+		if len(match) == 3 {
+			constName := match[1]
+			constValue := match[2]
+
+			// Remove a declaração da constante (apenas a primeira ocorrência)
+			code = strings.Replace(code, match[0], "", 1)
+
+			// Substitui todas as ocorrências do nome da constante pelo seu valor
+			// Usa boundary word para evitar substituir partes de identificadores
+			reReplace := regexp.MustCompile(`\b` + regexp.QuoteMeta(constName) + `\b`)
+			code = reReplace.ReplaceAllString(code, constValue)
+		}
+	}
+
+	return code
 }
 
 // ==================== Variable ====================
 
-// Variable representa uma variável com seu valor
+// Variable representa uma variável com seu valor e mutabilidade
 type Variable struct {
-	value int
+	value   int
+	mutable bool
 }
 
-// NewVariable cria uma nova variável
+// NewVariable cria uma nova variável mutável
 func NewVariable(value int) *Variable {
-	return &Variable{value: value}
+	return &Variable{value: value, mutable: true}
+}
+
+// NewImmutableVariable cria uma nova variável imutável
+func NewImmutableVariable(value int) *Variable {
+	return &Variable{value: value, mutable: false}
 }
 
 // ==================== SymbolTable ====================
@@ -80,9 +110,24 @@ func (st *SymbolTable) Get(name string) int {
 	panic("[Semantic] Variável não definida: " + name)
 }
 
-// Set adiciona ou atualiza uma variável
+// Set adiciona ou atualiza uma variável (apenas se for mutável)
 func (st *SymbolTable) Set(name string, value int) {
-	st.table[name] = NewVariable(value)
+	if variable, exists := st.table[name]; exists {
+		if !variable.mutable {
+			panic("[Semantic] Cannot change the value of immutable variable: " + name)
+		}
+		variable.value = value
+	} else {
+		st.table[name] = NewVariable(value)
+	}
+}
+
+// SetImmutable adiciona uma variável imutável
+func (st *SymbolTable) SetImmutable(name string, value int) {
+	if _, exists := st.table[name]; exists {
+		panic("[Semantic] Variável já definida: " + name)
+	}
+	st.table[name] = NewImmutableVariable(value)
 }
 
 // ==================== Lexer ====================
@@ -172,6 +217,10 @@ func (l *Lexer) SelectNext() {
 		if identStr == "println" && l.position < len(l.source) && rune(l.source[l.position]) == '!' {
 			l.position++ // Consumir o "!"
 			l.next = Token{tokenType: PRINT, value: "println"}
+		} else if identStr == "const" {
+			l.next = Token{tokenType: CONST, value: "const"}
+		} else if identStr == "let" {
+			l.next = Token{tokenType: LET, value: "let"}
 		} else if identStr == "println" {
 			// "println" sem "!" é um identificador normal
 			l.next = Token{tokenType: IDEN, value: identStr}
@@ -301,6 +350,22 @@ func (n *Assignment) Evaluate(st *SymbolTable) int {
 	return 0
 }
 
+// ImmutableDeclaration representa uma declaração de variável imutável (let)
+type ImmutableDeclaration struct {
+	children []Node
+}
+
+func NewImmutableDeclaration(identifier Node, expr Node) *ImmutableDeclaration {
+	return &ImmutableDeclaration{children: []Node{identifier, expr}}
+}
+
+func (n *ImmutableDeclaration) Evaluate(st *SymbolTable) int {
+	identNode := n.children[0].(*Identifier)
+	value := n.children[1].Evaluate(st)
+	st.SetImmutable(identNode.name, value)
+	return 0
+}
+
 // Block representa um bloco de instruções
 type Block struct {
 	children []Node
@@ -354,6 +419,31 @@ func ParseProgram() Node {
 }
 
 func ParseStatement() Node {
+	// Declaração imutável: let IDENTIFIER = EXPRESSION ;
+	if parserLexer.next.tokenType == LET {
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != IDEN {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected IDEN")
+		}
+		name := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != ASSIGN {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected ASSIGN")
+		}
+		parserLexer.SelectNext()
+
+		expr := ParseExpression()
+
+		if parserLexer.next.tokenType != END {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;)")
+		}
+		parserLexer.SelectNext()
+
+		return NewImmutableDeclaration(NewIdentifier(name), expr)
+	}
+
 	// Atribuição: IDENTIFIER = EXPRESSION ;
 	if parserLexer.next.tokenType == IDEN {
 		name := parserLexer.next.value.(string)
