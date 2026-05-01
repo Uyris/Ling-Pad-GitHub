@@ -133,6 +133,7 @@ type UnOp struct {
 	value    string
 	children []Node
 }
+
 func NewFact(value int) *Fact {
 	return &Fact{value: value, children: []Node{}}
 }
@@ -234,13 +235,12 @@ func ParseFactor() Node {
 	// Parênteses
 	if parserLexer.next.tokenType == OPEN_PAR {
 		parserLexer.SelectNext()
-		result := ParseExpression()
+		result = ParseExpression()
 		if parserLexer.next.tokenType != CLOSE_PAR {
 			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
 		}
 		parserLexer.SelectNext()
-		return result	
-		
+
 	} else if parserLexer.next.tokenType == INT { // Número inteiro
 		value := parserLexer.next.value.(int)
 		parserLexer.SelectNext()
@@ -250,19 +250,19 @@ func ParseFactor() Node {
 		op := parserLexer.next.value.(string)
 		parserLexer.SelectNext()
 		operand := ParseFactor()
-		return NewUnOp(op, operand)
+		result = NewUnOp(op, operand)
 
-	} else { 
+	} else {
 		panic("[Parser] Unexpected token in factor: " + parserLexer.next.tokenType)
 	}
 
-	if parserLexer.next.tokenType == FACT { // Fatorial
+	// Fatorial pós-fixo (aplica após qualquer fator)
+	if parserLexer.next.tokenType == FACT {
 		parserLexer.SelectNext()
 		result = NewFact(result.Evaluate())
 	}
 
-	return result;
-
+	return result
 }
 
 // Run é o ponto de entrada do Parser. Retorna a raiz da AST.
