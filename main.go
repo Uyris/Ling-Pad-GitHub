@@ -35,6 +35,7 @@ const (
 	END       = "END"
 	IF        = "IF"
 	WHILE     = "WHILE"
+	FOR       = "FOR"
 	ELSE      = "ELSE"
 	PRINT     = "PRINT"
 	READ      = "READ"
@@ -220,6 +221,8 @@ func (l *Lexer) SelectNext() {
 			l.next = Token{tokenType: IF, value: "if"}
 		} else if identStr == "while" {
 			l.next = Token{tokenType: WHILE, value: "while"}
+		} else if identStr == "for" {
+			l.next = Token{tokenType: FOR, value: "for"}
 		} else if identStr == "else" {
 			l.next = Token{tokenType: ELSE, value: "else"}
 		} else if identStr == "println" {
@@ -436,6 +439,41 @@ func (n *WhileNode) Evaluate(st *SymbolTable) int {
 	return 0
 }
 
+// ForNode representa uma estrutura de repetição for
+type ForNode struct {
+	children []Node // [init, condition, increment, body]
+}
+
+func NewForNode(init Node, condition Node, increment Node, body Node) *ForNode {
+	return &ForNode{children: []Node{init, condition, increment, body}}
+}
+
+func (n *ForNode) Evaluate(st *SymbolTable) int {
+	n.children[0].Evaluate(st) // init
+	for n.children[1].Evaluate(st) != 0 { // condition
+		n.children[3].Evaluate(st) // body
+		n.children[2].Evaluate(st) // increment
+	}
+	return 0
+}
+
+// IfExprNode representa uma expressão condicional if/else (ternária)
+type IfExprNode struct {
+	children []Node // [condition, thenExpr, elseExpr]
+}
+
+func NewIfExprNode(condition Node, thenExpr Node, elseExpr Node) *IfExprNode {
+	return &IfExprNode{children: []Node{condition, thenExpr, elseExpr}}
+}
+
+func (n *IfExprNode) Evaluate(st *SymbolTable) int {
+	condition := n.children[0].Evaluate(st)
+	if condition != 0 {
+		return n.children[1].Evaluate(st)
+	}
+	return n.children[2].Evaluate(st)
+}
+
 // ReadNode representa a leitura de inteiro do terminal
 type ReadNode struct {
 	children []Node
@@ -468,10 +506,11 @@ func (b *Block) AddChild(node Node) {
 }
 
 func (n *Block) Evaluate(st *SymbolTable) int {
+	lastValue := 0
 	for _, child := range n.children {
-		child.Evaluate(st)
+		lastValue = child.Evaluate(st)
 	}
-	return 0
+	return lastValue
 }
 
 // NoOp representa uma operação vazia (dummy)
@@ -485,6 +524,19 @@ func NewNoOp() *NoOp {
 
 func (n *NoOp) Evaluate(st *SymbolTable) int {
 	return 0
+}
+
+// ExprStmt representa uma expressão como statement
+type ExprStmt struct {
+	children []Node
+}
+
+func NewExprStmt(expr Node) *ExprStmt {
+	return &ExprStmt{children: []Node{expr}}
+}
+
+func (n *ExprStmt) Evaluate(st *SymbolTable) int {
+	return n.children[0].Evaluate(st)
 }
 
 // ==================== Parser ====================
@@ -531,33 +583,6 @@ func ParseStatement() Node {
 		return ParseBlock()
 	}
 
-	// IF: if ( BOOLEXPRESSION ) STATEMENT [else STATEMENT]
-	if parserLexer.next.tokenType == IF {
-		parserLexer.SelectNext()
-
-		if parserLexer.next.tokenType != OPEN_PAR {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_PAR")
-		}
-		parserLexer.SelectNext()
-
-		condition := ParseBoolExpression()
-
-		if parserLexer.next.tokenType != CLOSE_PAR {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
-		}
-		parserLexer.SelectNext()
-
-		thenBranch := ParseStatement()
-
-		if parserLexer.next.tokenType == ELSE {
-			parserLexer.SelectNext()
-			elseBranch := ParseStatement()
-			return NewIfNode(condition, thenBranch, elseBranch)
-		}
-
-		return NewIfNode(condition, thenBranch, nil)
-	}
-
 	// WHILE: while ( BOOLEXPRESSION ) STATEMENT
 	if parserLexer.next.tokenType == WHILE {
 		parserLexer.SelectNext()
@@ -578,24 +603,56 @@ func ParseStatement() Node {
 		return NewWhileNode(condition, body)
 	}
 
-	// Atribuição: IDENTIFIER = BOOLEXPRESSION ;
-	if parserLexer.next.tokenType == IDEN {
-		name := parserLexer.next.value.(string)
+	// FOR: for ( STATEMENT ; BOOLEXPRESSION ; STATEMENT ) STATEMENT
+	if parserLexer.next.tokenType == FOR {
 		parserLexer.SelectNext()
 
-		if parserLexer.next.tokenType != ASSIGN {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected ASSIGN")
+		if parserLexer.next.tokenType != OPEN_PAR {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_PAR")
 		}
 		parserLexer.SelectNext()
 
-		expr := ParseBoolExpression()
-
-		if parserLexer.next.tokenType != END {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;)")
+		// Parse init (pode ser vazio ou uma atribuição)
+		var init Node
+		if parserLexer.next.tokenType == END {
+			init = NewNoOp()
+			parserLexer.SelectNext()
+		} else {
+			init = ParseForInit()
+			if parserLexer.next.tokenType != END {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;)")
+			}
+			parserLexer.SelectNext()
 		}
-		parserLexer.SelectNext()
 
-		return NewAssignment(NewIdentifier(name), expr)
+		// Parse condition
+		var condition Node
+		if parserLexer.next.tokenType == END {
+			condition = NewIntVal(1) // Condição sempre verdadeira se vazia
+			parserLexer.SelectNext()
+		} else {
+			condition = ParseBoolExpression()
+			if parserLexer.next.tokenType != END {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;)")
+			}
+			parserLexer.SelectNext()
+		}
+
+		// Parse increment
+		var increment Node
+		if parserLexer.next.tokenType == CLOSE_PAR {
+			increment = NewNoOp()
+			parserLexer.SelectNext()
+		} else {
+			increment = ParseForIncrement()
+			if parserLexer.next.tokenType != CLOSE_PAR {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+			}
+			parserLexer.SelectNext()
+		}
+
+		body := ParseStatement()
+		return NewForNode(init, condition, increment, body)
 	}
 
 	// Impressão: PRINT ( BOOLEXPRESSION ) ;
@@ -626,6 +683,39 @@ func ParseStatement() Node {
 	if parserLexer.next.tokenType == END {
 		parserLexer.SelectNext()
 		return NewNoOp()
+	}
+
+	// Expression statement (para if expressions que retornam valores)
+	// Tenta parsear como expressão se for um token válido para começar expressão
+	if parserLexer.next.tokenType == INT ||
+		parserLexer.next.tokenType == IDEN ||
+		parserLexer.next.tokenType == OPEN_PAR ||
+		parserLexer.next.tokenType == READ ||
+		parserLexer.next.tokenType == NOT ||
+		parserLexer.next.tokenType == MINUS ||
+		parserLexer.next.tokenType == PLUS ||
+		parserLexer.next.tokenType == IF {
+
+		expr := ParseBoolExpression()
+
+		// Verifica se é uma atribuição: Identifier = expression
+		if iden, ok := expr.(*Identifier); ok && parserLexer.next.tokenType == ASSIGN {
+			parserLexer.SelectNext()
+			rightExpr := ParseBoolExpression()
+
+			if parserLexer.next.tokenType == END {
+				parserLexer.SelectNext()
+			}
+
+			return NewAssignment(iden, rightExpr)
+		}
+
+		// Se houver `;`, consome; senão, é a última expressão do bloco
+		if parserLexer.next.tokenType == END {
+			parserLexer.SelectNext()
+		}
+
+		return NewExprStmt(expr)
 	}
 
 	panic("[Parser] Unexpected token in statement: " + parserLexer.next.tokenType)
@@ -721,6 +811,32 @@ func ParsePower() Node {
 }
 
 func ParseFactor() Node {
+	// If expression: if BOOLEXPRESSION { BOOLEXPRESSION } else { BOOLEXPRESSION }
+	if parserLexer.next.tokenType == IF {
+		parserLexer.SelectNext()
+
+		condition := ParseBoolExpression()
+
+		// Then branch (bloco com chaves)
+		if parserLexer.next.tokenType != OPEN_BRA {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_BRA")
+		}
+		thenBranch := ParseBlock()
+
+		// Else branch (obrigatório para if expression)
+		if parserLexer.next.tokenType != ELSE {
+			panic("[Parser] If expression must have else clause")
+		}
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != OPEN_BRA {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_BRA")
+		}
+		elseBranch := ParseBlock()
+
+		return NewIfExprNode(condition, thenBranch, elseBranch)
+	}
+
 	// Parênteses
 	if parserLexer.next.tokenType == OPEN_PAR {
 		parserLexer.SelectNext()
@@ -764,6 +880,42 @@ func ParseFactor() Node {
 	}
 
 	panic("[Parser] Unexpected token in factor: " + parserLexer.next.tokenType)
+}
+
+func ParseForInit() Node {
+	// Atribuição: IDENTIFIER = BOOLEXPRESSION
+	if parserLexer.next.tokenType == IDEN {
+		name := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != ASSIGN {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected ASSIGN")
+		}
+		parserLexer.SelectNext()
+
+		expr := ParseBoolExpression()
+		return NewAssignment(NewIdentifier(name), expr)
+	}
+
+	panic("[Parser] Unexpected token in for init: " + parserLexer.next.tokenType)
+}
+
+func ParseForIncrement() Node {
+	// Atribuição: IDENTIFIER = BOOLEXPRESSION
+	if parserLexer.next.tokenType == IDEN {
+		name := parserLexer.next.value.(string)
+		parserLexer.SelectNext()
+
+		if parserLexer.next.tokenType != ASSIGN {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected ASSIGN")
+		}
+		parserLexer.SelectNext()
+
+		expr := ParseBoolExpression()
+		return NewAssignment(NewIdentifier(name), expr)
+	}
+
+	panic("[Parser] Unexpected token in for increment: " + parserLexer.next.tokenType)
 }
 
 // Run é o ponto de entrada do Parser. Retorna a raiz da AST.
