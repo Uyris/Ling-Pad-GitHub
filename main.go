@@ -62,15 +62,18 @@ func main() {
 	astGen := parser.Parse(code)
 	astGen.Generate(stGen)
 
-	// Salvar arquivo de assembly
-	outputName := filepath.Base(filename)
-	outputName = outputName[:len(outputName)-5] + ".asm" // Remove .ling e adiciona .asm
+	// Salvar arquivo de assembly no mesmo diretório do arquivo de entrada
+	dir := filepath.Dir(filename)
+	baseName := filepath.Base(filename)
+	// Remove .ling e adiciona .asm
+	outputName := baseName[:len(baseName)-5] + ".asm"
+	outputPath := filepath.Join(dir, outputName)
 
 	codeGen := codegen.NewCode()
 	for _, instr := range ast.CodeGenerator.GetInstructions() {
 		codeGen.Append(instr)
 	}
-	codeGen.Dump(outputName)
+	codeGen.Dump(outputPath)
 
-	fmt.Printf("[Main] Arquivo de assembly salvo: %s\n", outputName)
+	fmt.Printf("[Main] Arquivo de assembly salvo: %s\n", outputPath)
 }
