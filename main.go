@@ -438,7 +438,7 @@ func (n *CastOp) Evaluate(st *SymbolTable) *Variable {
 		case TYPE_I32:
 			return NewVariable(operand.value.(int), TYPE_I32, false)
 		case TYPE_F64:
-			return NewVariable(int(operand.value.(float64)), TYPE_I32, false)
+			return NewVariable(int(math.Round(operand.value.(float64))), TYPE_I32, false)
 		case TYPE_BOOL:
 			if operand.value.(bool) {
 				return NewVariable(1, TYPE_I32, false)
