@@ -63,11 +63,29 @@ func main() {
 	astGen.Generate(stGen)
 
 	// Salvar arquivo de assembly no mesmo diretório do arquivo de entrada
-	dir := filepath.Dir(filename)
-	baseName := filepath.Base(filename)
-	// Remove .ling e adiciona .asm
-	outputName := baseName[:len(baseName)-5] + ".asm"
-	outputPath := filepath.Join(dir, outputName)
+	var outputPath string
+
+	if filename == "" {
+		outputPath = "output.asm"
+	} else {
+		// Normaliza o caminho para usar separadores do sistema operacional
+		absPath, err := filepath.Abs(filename)
+		if err != nil {
+			// Se não conseguir caminho absoluto, usa o caminho relativo
+			absPath = filename
+		}
+
+		dir := filepath.Dir(absPath)
+		baseName := filepath.Base(absPath)
+
+		// Remove .ling e adiciona .asm
+		if len(baseName) > 5 && baseName[len(baseName)-5:] == ".ling" {
+			outputName := baseName[:len(baseName)-5] + ".asm"
+			outputPath = filepath.Join(dir, outputName)
+		} else {
+			outputPath = filepath.Join(dir, baseName+".asm")
+		}
+	}
 
 	codeGen := codegen.NewCode()
 	for _, instr := range ast.CodeGenerator.GetInstructions() {
