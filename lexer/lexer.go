@@ -40,6 +40,9 @@ func (l *Lexer) SelectNext() {
 	if currentChar == '+' {
 		l.Next = token.Token{TokenType: token.PLUS, Value: "+"}
 		l.Position++
+	} else if currentChar == '-' && l.Position+1 < len(l.Source) && l.Source[l.Position+1] == '>' {
+		l.Next = token.Token{TokenType: token.ARROW, Value: "->"}
+		l.Position += 2
 	} else if currentChar == '-' {
 		l.Next = token.Token{TokenType: token.MINUS, Value: "-"}
 		l.Position++

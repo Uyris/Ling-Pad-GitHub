@@ -686,6 +686,13 @@ func NewFunctionDec(name string, params []string, paramTypes []string, body Node
 	}
 }
 
+func (n *FunctionDec) GetBody() Node {
+	if len(n.children) > 0 {
+		return n.children[0]
+	}
+	return nil
+}
+
 func (n *FunctionDec) Evaluate(st *semantic.SymbolTable) *semantic.Variable {
 	// Registra a função na tabela de símbolos
 	sig := &semantic.FunctionSignature{

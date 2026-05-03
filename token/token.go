@@ -22,6 +22,7 @@ const (
 	OPEN_BRA  = "OPEN_BRA"
 	CLOSE_BRA = "CLOSE_BRA"
 	ASSIGN    = "ASSIGN"
+	ARROW     = "ARROW"
 	COLON     = "COLON"
 	COMMA     = "COMMA"
 	END       = "END"

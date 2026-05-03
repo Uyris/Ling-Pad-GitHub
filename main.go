@@ -41,6 +41,14 @@ func main() {
 	st := semantic.NewSymbolTable()
 	astRoot.Evaluate(st)
 
+	// Se existe função main(), chama automaticamente
+	if mainFunc, exists := st.Functions["main"]; exists {
+		funcDec := mainFunc.Node.(*ast.FunctionDec)
+		localSt := semantic.NewSymbolTable()
+		localSt.Functions = st.Functions
+		funcDec.GetBody().Evaluate(localSt)
+	}
+
 	// GERAÇÃO DE CÓDIGO: Reinicializa para gerar assembly
 	ast.CodeGenerator = ast.NewCodeGen()
 	ast.NextNodeID = 0

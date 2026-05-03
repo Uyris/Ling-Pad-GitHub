@@ -85,6 +85,25 @@ func ParseFunctionDec() ast.Node {
 	}
 	parserLexer.SelectNext()
 
+	// Verifica se há return type: -> TYPE ou -> ()
+	if parserLexer.Next.TokenType == token.ARROW {
+		parserLexer.SelectNext()
+		// Pula o return type (pode ser TYPE ou OPEN_PAR para void)
+		if parserLexer.Next.TokenType == token.OPEN_PAR {
+			// Syntax: -> ()
+			parserLexer.SelectNext()
+			if parserLexer.Next.TokenType != token.CLOSE_PAR {
+				panic("[Parser] Unexpected token: " + parserLexer.Next.TokenType + ", expected CLOSE_PAR in return type")
+			}
+			parserLexer.SelectNext()
+		} else if parserLexer.Next.TokenType == token.TYPE {
+			// Syntax: -> i32, -> bool, etc
+			parserLexer.SelectNext()
+		} else {
+			panic("[Parser] Unexpected token: " + parserLexer.Next.TokenType + ", expected TYPE or () in return type")
+		}
+	}
+
 	// Corpo da função
 	body := ParseBlock()
 
@@ -221,11 +240,42 @@ func ParseStatement() ast.Node {
 		return ast.NewWhileNode(condition, body)
 	}
 
-	// Atribuição: IDENTIFIER = BOOLEXPRESSION ;
+	// Atribuição ou chamada de função: IDENTIFIER [= BOOLEXPRESSION | ( ... ) ]  ;
 	if parserLexer.Next.TokenType == token.IDEN {
 		name := parserLexer.Next.Value.(string)
 		parserLexer.SelectNext()
 
+		// Verifica se é chamada de função
+		if parserLexer.Next.TokenType == token.OPEN_PAR {
+			// Chamada de função como statement
+			parserLexer.SelectNext()
+
+			// Paisa os argumentos
+			args := []ast.Node{}
+			for parserLexer.Next.TokenType != token.CLOSE_PAR {
+				args = append(args, ParseBoolExpression())
+
+				if parserLexer.Next.TokenType == token.COMMA {
+					parserLexer.SelectNext()
+				} else if parserLexer.Next.TokenType != token.CLOSE_PAR {
+					panic("[Parser] Unexpected token: " + parserLexer.Next.TokenType + ", expected COMMA or CLOSE_PAR")
+				}
+			}
+
+			if parserLexer.Next.TokenType != token.CLOSE_PAR {
+				panic("[Parser] Unexpected token: " + parserLexer.Next.TokenType + ", expected CLOSE_PAR")
+			}
+			parserLexer.SelectNext()
+
+			if parserLexer.Next.TokenType != token.END {
+				panic("[Parser] Unexpected token: " + parserLexer.Next.TokenType + ", expected END (;)")
+			}
+			parserLexer.SelectNext()
+
+			return ast.NewFunctionCall(name, args)
+		}
+
+		// Atribuição: IDENTIFIER = BOOLEXPRESSION ;
 		if parserLexer.Next.TokenType != token.ASSIGN {
 			panic("[Parser] Unexpected token: " + parserLexer.Next.TokenType + ", expected ASSIGN")
 		}
