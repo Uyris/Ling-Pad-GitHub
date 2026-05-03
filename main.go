@@ -15,6 +15,7 @@ import (
 // Tipos de token
 const (
 	INT       = "INT"
+	FLOAT     = "FLOAT"
 	BOOL      = "BOOL"
 	STR       = "STR"
 	PLUS      = "PLUS"
@@ -50,6 +51,7 @@ const (
 
 const (
 	TYPE_I32  = "i32"
+	TYPE_F64  = "f64"
 	TYPE_BOOL = "bool"
 	TYPE_STR  = "str"
 	TYPE_VOID = "void"
@@ -99,6 +101,8 @@ func defaultValueForType(varType string) interface{} {
 	switch varType {
 	case TYPE_I32:
 		return 0
+	case TYPE_F64:
+		return 0.0
 	case TYPE_BOOL:
 		return false
 	case TYPE_STR:
@@ -114,6 +118,8 @@ func variableToString(v *Variable) string {
 		return v.value.(string)
 	case TYPE_I32:
 		return strconv.Itoa(v.value.(int))
+	case TYPE_F64:
+		return strconv.FormatFloat(v.value.(float64), 'f', -1, 64)
 	case TYPE_BOOL:
 		if v.value.(bool) {
 			return "true"
@@ -294,11 +300,30 @@ func (l *Lexer) SelectNext() {
 			numStr += string(l.source[l.position])
 			l.position++
 		}
-		num, err := strconv.Atoi(numStr)
-		if err != nil {
-			panic("[Lexer] Erro ao converter número: " + numStr)
+
+		// Verifica se é um número float
+		if l.position < len(l.source) && rune(l.source[l.position]) == '.' &&
+			l.position+1 < len(l.source) && unicode.IsDigit(rune(l.source[l.position+1])) {
+			numStr += "."
+			l.position++
+			for l.position < len(l.source) && unicode.IsDigit(rune(l.source[l.position])) {
+				numStr += string(l.source[l.position])
+				l.position++
+			}
+
+			floatVal, err := strconv.ParseFloat(numStr, 64)
+			if err != nil {
+				panic("[Lexer] Erro ao converter float: " + numStr)
+			}
+			l.next = Token{tokenType: FLOAT, value: floatVal}
+		} else {
+			// Número inteiro
+			num, err := strconv.Atoi(numStr)
+			if err != nil {
+				panic("[Lexer] Erro ao converter número: " + numStr)
+			}
+			l.next = Token{tokenType: INT, value: num}
 		}
-		l.next = Token{tokenType: INT, value: num}
 	} else if unicode.IsLetter(currentChar) || currentChar == '_' {
 		// Identifiers e palavras reservadas
 		if currentChar == '_' {
@@ -332,7 +357,7 @@ func (l *Lexer) SelectNext() {
 			l.next = Token{tokenType: BOOL, value: true}
 		} else if identStr == "false" {
 			l.next = Token{tokenType: BOOL, value: false}
-		} else if identStr == TYPE_I32 || identStr == TYPE_BOOL || identStr == TYPE_STR {
+		} else if identStr == TYPE_I32 || identStr == TYPE_F64 || identStr == TYPE_BOOL || identStr == TYPE_STR {
 			l.next = Token{tokenType: TYPE, value: identStr}
 		} else if identStr == "println" {
 			// "println" sem "!" é um identificador normal
@@ -380,6 +405,87 @@ func (n *BoolVal) Evaluate(st *SymbolTable) *Variable {
 	return NewVariable(n.value, TYPE_BOOL, false)
 }
 
+// FloatVal representa um valor float
+type FloatVal struct {
+	value    float64
+	children []Node
+}
+
+func NewFloatVal(value float64) *FloatVal {
+	return &FloatVal{value: value, children: []Node{}}
+}
+
+func (n *FloatVal) Evaluate(st *SymbolTable) *Variable {
+	return NewVariable(n.value, TYPE_F64, false)
+}
+
+// CastOp representa uma operação de casting
+type CastOp struct {
+	targetType string
+	children   []Node
+}
+
+func NewCastOp(targetType string, operand Node) *CastOp {
+	return &CastOp{targetType: targetType, children: []Node{operand}}
+}
+
+func (n *CastOp) Evaluate(st *SymbolTable) *Variable {
+	operand := n.children[0].Evaluate(st)
+
+	switch n.targetType {
+	case TYPE_I32:
+		switch operand.varType {
+		case TYPE_I32:
+			return NewVariable(operand.value.(int), TYPE_I32, false)
+		case TYPE_F64:
+			return NewVariable(int(operand.value.(float64)), TYPE_I32, false)
+		case TYPE_BOOL:
+			if operand.value.(bool) {
+				return NewVariable(1, TYPE_I32, false)
+			}
+			return NewVariable(0, TYPE_I32, false)
+		case TYPE_STR:
+			val, err := strconv.Atoi(operand.value.(string))
+			if err != nil {
+				panic("[Semantic] Cannot cast string to i32: " + operand.value.(string))
+			}
+			return NewVariable(val, TYPE_I32, false)
+		}
+	case TYPE_F64:
+		switch operand.varType {
+		case TYPE_I32:
+			return NewVariable(float64(operand.value.(int)), TYPE_F64, false)
+		case TYPE_F64:
+			return NewVariable(operand.value.(float64), TYPE_F64, false)
+		case TYPE_BOOL:
+			if operand.value.(bool) {
+				return NewVariable(1.0, TYPE_F64, false)
+			}
+			return NewVariable(0.0, TYPE_F64, false)
+		case TYPE_STR:
+			val, err := strconv.ParseFloat(operand.value.(string), 64)
+			if err != nil {
+				panic("[Semantic] Cannot cast string to f64: " + operand.value.(string))
+			}
+			return NewVariable(val, TYPE_F64, false)
+		}
+	case TYPE_BOOL:
+		switch operand.varType {
+		case TYPE_I32:
+			return NewVariable(operand.value.(int) != 0, TYPE_BOOL, false)
+		case TYPE_F64:
+			return NewVariable(operand.value.(float64) != 0.0, TYPE_BOOL, false)
+		case TYPE_BOOL:
+			return NewVariable(operand.value.(bool), TYPE_BOOL, false)
+		}
+	case TYPE_STR:
+		val := variableToString(operand)
+		return NewVariable(val, TYPE_STR, false)
+	}
+
+	panic("[Semantic] Unknown cast target type: " + n.targetType)
+}
+
 // StringVal representa um valor string
 type StringVal struct {
 	value    string
@@ -407,15 +513,21 @@ func NewUnOp(operator string, operand Node) *UnOp {
 func (n *UnOp) Evaluate(st *SymbolTable) *Variable {
 	childResult := n.children[0].Evaluate(st)
 	if n.value == "-" {
-		if childResult.varType != TYPE_I32 {
-			panic("[Semantic] Unary '-' requires i32")
+		if childResult.varType == TYPE_I32 {
+			return NewVariable(-(childResult.value.(int)), TYPE_I32, false)
 		}
-		return NewVariable(-(childResult.value.(int)), TYPE_I32, false)
+		if childResult.varType == TYPE_F64 {
+			return NewVariable(-(childResult.value.(float64)), TYPE_F64, false)
+		}
+		panic("[Semantic] Unary '-' requires i32 or f64")
 	} else if n.value == "+" {
-		if childResult.varType != TYPE_I32 {
-			panic("[Semantic] Unary '+' requires i32")
+		if childResult.varType == TYPE_I32 {
+			return NewVariable(childResult.value.(int), TYPE_I32, false)
 		}
-		return NewVariable(childResult.value.(int), TYPE_I32, false)
+		if childResult.varType == TYPE_F64 {
+			return NewVariable(childResult.value.(float64), TYPE_F64, false)
+		}
+		panic("[Semantic] Unary '+' requires i32 or f64")
 	} else if n.value == "!" {
 		if childResult.varType != TYPE_BOOL {
 			panic("[Semantic] Unary '!' requires bool")
@@ -423,6 +535,23 @@ func (n *UnOp) Evaluate(st *SymbolTable) *Variable {
 		return NewVariable(!childResult.value.(bool), TYPE_BOOL, false)
 	}
 	panic("[Semantic] Unknown unary operator: " + n.value)
+}
+
+// toFloat converte variáveis numéricas para float64
+func toFloat(v *Variable) float64 {
+	switch v.varType {
+	case TYPE_I32:
+		return float64(v.value.(int))
+	case TYPE_F64:
+		return v.value.(float64)
+	case TYPE_BOOL:
+		if v.value.(bool) {
+			return 1.0
+		}
+		return 0.0
+	default:
+		panic("[Semantic] Cannot convert " + v.varType + " to float")
+	}
 }
 
 // BinOp representa uma operação binária (2 filhos)
@@ -471,48 +600,95 @@ func (n *BinOp) Evaluate(st *SymbolTable) *Variable {
 
 	switch n.value {
 	case "+":
-		if leftResult.varType == TYPE_I32 && rightResult.varType == TYPE_I32 {
-			return NewVariable(leftResult.value.(int)+rightResult.value.(int), TYPE_I32, false)
-		}
+		// Concatenação de strings
 		if leftResult.varType == TYPE_STR || rightResult.varType == TYPE_STR {
 			return NewVariable(variableToString(leftResult)+variableToString(rightResult), TYPE_STR, false)
 		}
+		// Adição numérica (int ou float)
+		if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+			(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+			// Se qualquer um for float, resultado é float
+			if leftResult.varType == TYPE_F64 || rightResult.varType == TYPE_F64 {
+				leftVal := toFloat(leftResult)
+				rightVal := toFloat(rightResult)
+				return NewVariable(leftVal+rightVal, TYPE_F64, false)
+			}
+			// Ambos são int
+			return NewVariable(leftResult.value.(int)+rightResult.value.(int), TYPE_I32, false)
+		}
 		panic("[Semantic] Type mismatch in '+'")
 	case "-":
-		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
-			panic("[Semantic] Operator '-' requires i32 operands")
+		if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+			(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+			if leftResult.varType == TYPE_F64 || rightResult.varType == TYPE_F64 {
+				leftVal := toFloat(leftResult)
+				rightVal := toFloat(rightResult)
+				return NewVariable(leftVal-rightVal, TYPE_F64, false)
+			}
+			return NewVariable(leftResult.value.(int)-rightResult.value.(int), TYPE_I32, false)
 		}
-		return NewVariable(leftResult.value.(int)-rightResult.value.(int), TYPE_I32, false)
+		panic("[Semantic] Operator '-' requires numeric operands")
 	case "^":
 		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
 			panic("[Semantic] Operator '^' requires i32 operands")
 		}
 		return NewVariable(leftResult.value.(int)^rightResult.value.(int), TYPE_I32, false)
 	case "*":
-		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
-			panic("[Semantic] Operator '*' requires i32 operands")
+		if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+			(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+			if leftResult.varType == TYPE_F64 || rightResult.varType == TYPE_F64 {
+				leftVal := toFloat(leftResult)
+				rightVal := toFloat(rightResult)
+				return NewVariable(leftVal*rightVal, TYPE_F64, false)
+			}
+			return NewVariable(leftResult.value.(int)*rightResult.value.(int), TYPE_I32, false)
 		}
-		return NewVariable(leftResult.value.(int)*rightResult.value.(int), TYPE_I32, false)
+		panic("[Semantic] Operator '*' requires numeric operands")
 	case "/":
-		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
-			panic("[Semantic] Operator '/' requires i32 operands")
+		if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+			(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+			if leftResult.varType == TYPE_F64 || rightResult.varType == TYPE_F64 {
+				leftVal := toFloat(leftResult)
+				rightVal := toFloat(rightResult)
+				if rightVal == 0.0 {
+					panic("[Semantic] Division by zero")
+				}
+				return NewVariable(leftVal/rightVal, TYPE_F64, false)
+			}
+			// Int division
+			if rightResult.value.(int) == 0 {
+				panic("[Semantic] Division by zero")
+			}
+			return NewVariable(leftResult.value.(int)/rightResult.value.(int), TYPE_I32, false)
 		}
-		if rightResult.value.(int) == 0 {
-			panic("[Semantic] Division by zero")
-		}
-		return NewVariable(leftResult.value.(int)/rightResult.value.(int), TYPE_I32, false)
+		panic("[Semantic] Operator '/' requires numeric operands")
 	case "**":
-		if leftResult.varType != TYPE_I32 || rightResult.varType != TYPE_I32 {
-			panic("[Semantic] Operator '**' requires i32 operands")
+		if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+			(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+			if leftResult.varType == TYPE_F64 || rightResult.varType == TYPE_F64 {
+				leftVal := toFloat(leftResult)
+				rightVal := toFloat(rightResult)
+				return NewVariable(math.Pow(leftVal, rightVal), TYPE_F64, false)
+			}
+			return NewVariable(int(math.Pow(float64(leftResult.value.(int)), float64(rightResult.value.(int)))), TYPE_I32, false)
 		}
-		return NewVariable(int(math.Pow(float64(leftResult.value.(int)), float64(rightResult.value.(int)))), TYPE_I32, false)
+		panic("[Semantic] Operator '**' requires numeric operands")
 	case "==":
 		if leftResult.varType != rightResult.varType {
+			// Compatibilidade: int == float é permitido
+			if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+				(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+				leftVal := toFloat(leftResult)
+				rightVal := toFloat(rightResult)
+				return NewVariable(leftVal == rightVal, TYPE_BOOL, false)
+			}
 			panic("[Semantic] Type mismatch in '=='")
 		}
 		switch leftResult.varType {
 		case TYPE_I32:
 			return NewVariable(leftResult.value.(int) == rightResult.value.(int), TYPE_BOOL, false)
+		case TYPE_F64:
+			return NewVariable(leftResult.value.(float64) == rightResult.value.(float64), TYPE_BOOL, false)
 		case TYPE_BOOL:
 			return NewVariable(leftResult.value.(bool) == rightResult.value.(bool), TYPE_BOOL, false)
 		case TYPE_STR:
@@ -520,21 +696,27 @@ func (n *BinOp) Evaluate(st *SymbolTable) *Variable {
 		}
 		panic("[Semantic] Unsupported type in '=='")
 	case ">":
-		if leftResult.varType == TYPE_I32 && rightResult.varType == TYPE_I32 {
-			return NewVariable(leftResult.value.(int) > rightResult.value.(int), TYPE_BOOL, false)
+		if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+			(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+			leftVal := toFloat(leftResult)
+			rightVal := toFloat(rightResult)
+			return NewVariable(leftVal > rightVal, TYPE_BOOL, false)
 		}
 		if leftResult.varType == TYPE_STR && rightResult.varType == TYPE_STR {
 			return NewVariable(leftResult.value.(string) > rightResult.value.(string), TYPE_BOOL, false)
 		}
-		panic("[Semantic] Operator '>' requires i32 or str operands of same type")
+		panic("[Semantic] Operator '>' requires numeric or str operands of compatible types")
 	case "<":
-		if leftResult.varType == TYPE_I32 && rightResult.varType == TYPE_I32 {
-			return NewVariable(leftResult.value.(int) < rightResult.value.(int), TYPE_BOOL, false)
+		if (leftResult.varType == TYPE_I32 || leftResult.varType == TYPE_F64) &&
+			(rightResult.varType == TYPE_I32 || rightResult.varType == TYPE_F64) {
+			leftVal := toFloat(leftResult)
+			rightVal := toFloat(rightResult)
+			return NewVariable(leftVal < rightVal, TYPE_BOOL, false)
 		}
 		if leftResult.varType == TYPE_STR && rightResult.varType == TYPE_STR {
 			return NewVariable(leftResult.value.(string) < rightResult.value.(string), TYPE_BOOL, false)
 		}
-		panic("[Semantic] Operator '<' requires i32 or str operands of same type")
+		panic("[Semantic] Operator '<' requires numeric or str operands of compatible types")
 	}
 	panic("[Semantic] Unknown binary operator: " + n.value)
 }
@@ -998,9 +1180,26 @@ func ParsePower() Node {
 }
 
 func ParseFactor() Node {
-	// Parênteses
+	// Parênteses ou Casting: (expr) ou (tipo) expr
 	if parserLexer.next.tokenType == OPEN_PAR {
 		parserLexer.SelectNext()
+
+		// Verifica se é casting: (tipo)
+		if parserLexer.next.tokenType == TYPE {
+			castType := parserLexer.next.value.(string)
+			parserLexer.SelectNext()
+
+			if parserLexer.next.tokenType != CLOSE_PAR {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR after cast type")
+			}
+			parserLexer.SelectNext()
+
+			// Parse a expressão a ser convertida (máxima precedência após casting)
+			operand := ParseFactor()
+			return NewCastOp(castType, operand)
+		}
+
+		// Expressão entre parênteses: (expr)
 		result := ParseBoolExpression()
 		if parserLexer.next.tokenType != CLOSE_PAR {
 			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
@@ -1038,6 +1237,13 @@ func ParseFactor() Node {
 		value := parserLexer.next.value.(string)
 		parserLexer.SelectNext()
 		return NewStringVal(value)
+	}
+
+	// Float
+	if parserLexer.next.tokenType == FLOAT {
+		value := parserLexer.next.value.(float64)
+		parserLexer.SelectNext()
+		return NewFloatVal(value)
 	}
 
 	// Identificador
