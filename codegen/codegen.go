@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"fmt"
 	"os"
 )
 
@@ -24,8 +25,13 @@ func (c *Code) Clear() {
 	c.Instructions = []string{}
 }
 
+// GetInstructions retorna as instruções
+func (c *Code) GetInstructions() []string {
+	return c.Instructions
+}
+
 // Dump escreve o código assembly em um arquivo
-func (c *Code) Dump(filename string) {
+func (c *Code) Dump(filename string) error {
 	header := `section .data
   format_out: db "%d", 10, 0 ; format do printf
   format_in: db "%d", 0 ; format do scanf
@@ -55,13 +61,23 @@ _start:
 
 	file, err := os.Create(filename)
 	if err != nil {
-		panic("[Code] Erro ao criar arquivo: " + filename)
+		return fmt.Errorf("erro ao criar arquivo '%s': %w", filename, err)
 	}
 	defer file.Close()
 
-	file.WriteString(header + "\n")
-	for _, instr := range c.Instructions {
-		file.WriteString(instr + "\n")
+	if _, err := file.WriteString(header + "\n"); err != nil {
+		return fmt.Errorf("erro ao escrever header em '%s': %w", filename, err)
 	}
-	file.WriteString(footer + "\n")
+
+	for _, instr := range c.Instructions {
+		if _, err := file.WriteString(instr + "\n"); err != nil {
+			return fmt.Errorf("erro ao escrever instrução em '%s': %w", filename, err)
+		}
+	}
+
+	if _, err := file.WriteString(footer + "\n"); err != nil {
+		return fmt.Errorf("erro ao escrever footer em '%s': %w", filename, err)
+	}
+
+	return nil
 }

@@ -103,13 +103,25 @@ func main() {
 
 	fmt.Printf("[Main] DEBUG: Caminho de saída calculado: %s\n", outputPath)
 
+	// Garante que o diretório de saída existe
+	outputDir := filepath.Dir(outputPath)
+	if outputDir != "." && outputDir != "" {
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "[Main] ERROR: Falha ao criar diretório '%s': %v\n", outputDir, err)
+			os.Exit(1)
+		}
+	}
+
 	codeGen := codegen.NewCode()
 	for _, instr := range ast.CodeGenerator.GetInstructions() {
 		codeGen.Append(instr)
 	}
 
 	fmt.Printf("[Main] DEBUG: Salvando %d instruções de assembly...\n", len(ast.CodeGenerator.GetInstructions()))
-	codeGen.Dump(outputPath)
+	if err := codeGen.Dump(outputPath); err != nil {
+		fmt.Fprintf(os.Stderr, "[Main] ERROR ao salvar assembly: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Verificar se o arquivo foi criado
 	if _, err := os.Stat(outputPath); err == nil {
