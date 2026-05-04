@@ -3,22 +3,24 @@
 [![Compilation Status](https://compiler-tester.insper-comp.com.br/svg/Uyris/Ling-Pad-GitHub)](https://compiler-tester.insper-comp.com.br/svg/Uyris/Ling-Pad-GitHub)
 
 ## Diagrama Sintático
-![alt text](image.png)
 
-
-**Descricao:** A linguagem suporta atribuicao, impressao, condicionais, lacos, leitura de terminal e expressoes aritmeticas/booleanas.
+**Descricao:** A linguagem suporta atribuicao, impressao, condicionais, lacos, leitura de terminal, funcoes com retorno tipado, escopo de variaveis e expressoes aritmeticas/booleanas.
 
 **EBNF:**
 ```ebnf
-PROGRAM = { STATEMENT } ;
-STATEMENT = BLOCK
+PROGRAM = { FUNCDEC | VARDEC } ;
+FUNCDEC = "fn", IDENTIFIER, "(", [PARAMS], ")", ["->", (TYPE | "(", ")")], BLOCK ;
+PARAMS = IDENTIFIER, ":", TYPE, {",", IDENTIFIER, ":", TYPE} ;
+VARDEC = "let", [MUT], IDENTIFIER, ":", TYPE, ["=", BOOLEXPRESSION], ";" ;
+BLOCK = "{", { STATEMENT }, "}" ;
+STATEMENT = VARDEC
+          | BLOCK
           | IF, "(", BOOLEXPRESSION, ")", STATEMENT, [ELSE, STATEMENT]
           | WHILE, "(", BOOLEXPRESSION, ")", STATEMENT
-          | LET, [MUT], IDENTIFIER, ":", TYPE, ["=", BOOLEXPRESSION], ";"
-          | IDENTIFIER, "=", BOOLEXPRESSION, ";"
+          | RETURN, BOOLEXPRESSION, ";"
           | PRINT, "(", BOOLEXPRESSION, ")", ";"
+          | IDENTIFIER, ("=", BOOLEXPRESSION | "(", [BOOLEXPRESSION, {",", BOOLEXPRESSION}], ")"), ";"
           | ";" ;
-BLOCK = "{", { STATEMENT }, "}" ;
 BOOLEXPRESSION = BOOLTERM, { "||", BOOLTERM } ;
 BOOLTERM = RELEXPRESSION, { "&&", RELEXPRESSION } ;
 RELEXPRESSION = EXPRESSION, [("==" | "<" | ">"), EXPRESSION] ;
@@ -30,7 +32,7 @@ FACTOR = "(", BOOLEXPRESSION, ")"
        | NUMBER
        | BOOLEAN
        | STRING
-       | IDENTIFIER
+       | IDENTIFIER, ["(", [BOOLEXPRESSION, {",", BOOLEXPRESSION}], ")"]
        | READ, "(", ")" ;
 
 IF = "if" ;
@@ -40,6 +42,8 @@ LET = "let" ;
 MUT = "mut" ;
 PRINT = "println!" ;
 READ = "scanln!" ;
+FUNC = "fn" ;
+RETURN = "return" ;
 
 BOOLEAN = "true" | "false" ;
 TYPE = "i32" | "bool" | "str" ;

@@ -36,7 +36,11 @@ const (
 	CLOSE_BRA = "CLOSE_BRA"
 	ASSIGN    = "ASSIGN"
 	COLON     = "COLON"
+	COMMA     = "COMMA"
+	ARROW     = "ARROW"
 	END       = "END"
+	FUNC      = "FUNC"
+	RETURN    = "RETURN"
 	IF        = "IF"
 	WHILE     = "WHILE"
 	ELSE      = "ELSE"
@@ -135,20 +139,25 @@ type Variable struct {
 	value   interface{}
 	varType string
 	mutable bool
+	isFunc  bool
 	shift   int // Deslocamento relativo ao EBP na pilha (em bytes)
 }
 
 // NewVariable cria uma nova variável
 func NewVariable(value interface{}, varType string, mutable bool) *Variable {
-	return &Variable{value: value, varType: varType, mutable: mutable, shift: 0}
+	return &Variable{value: value, varType: varType, mutable: mutable, isFunc: false, shift: 0}
 }
 
 func (v *Variable) Clone() *Variable {
-	return &Variable{value: v.value, varType: v.varType, mutable: v.mutable, shift: v.shift}
+	return &Variable{value: v.value, varType: v.varType, mutable: v.mutable, isFunc: v.isFunc, shift: v.shift}
 }
 
 func NewVoidVariable() *Variable {
 	return NewVariable(nil, TYPE_VOID, false)
+}
+
+func NewFunctionVariable(funcNode *FuncDec) *Variable {
+	return &Variable{value: funcNode, varType: funcNode.value, mutable: false, isFunc: true, shift: 0}
 }
 
 func defaultValueForType(varType string) interface{} {
@@ -185,14 +194,16 @@ func variableToString(v *Variable) string {
 // SymbolTable armazena variáveis e seus valores
 type SymbolTable struct {
 	table         map[string]*Variable
+	parent        *SymbolTable
 	nextShift     int // Rastreia o próximo deslocamento na pilha
 	variableCount int // Número de variáveis declaradas
 }
 
 // NewSymbolTable cria uma nova tabela de símbolos
-func NewSymbolTable() *SymbolTable {
+func NewSymbolTable(parent *SymbolTable) *SymbolTable {
 	return &SymbolTable{
 		table:     make(map[string]*Variable),
+		parent:    parent,
 		nextShift: 4, // Primeira variável em [EBP-4]
 	}
 }
@@ -202,17 +213,38 @@ func (st *SymbolTable) Get(name string) *Variable {
 	if variable, exists := st.table[name]; exists {
 		return variable
 	}
+	if st.parent != nil {
+		return st.parent.Get(name)
+	}
 	panic("[Semantic] Variável não definida: " + name)
 }
 
 func (st *SymbolTable) Exists(name string) bool {
+	if _, exists := st.table[name]; exists {
+		return true
+	}
+	if st.parent != nil {
+		return st.parent.Exists(name)
+	}
+	return false
+}
+
+func (st *SymbolTable) ExistsCurrent(name string) bool {
 	_, exists := st.table[name]
 	return exists
 }
 
+func (st *SymbolTable) Root() *SymbolTable {
+	current := st
+	for current.parent != nil {
+		current = current.parent
+	}
+	return current
+}
+
 // CreateVariable declara uma variável na tabela
 func (st *SymbolTable) CreateVariable(name string, varType string, mutable bool) {
-	if st.Exists(name) {
+	if st.ExistsCurrent(name) {
 		panic("[Semantic] Variável já declarada: " + name)
 	}
 	variable := NewVariable(defaultValueForType(varType), varType, mutable)
@@ -220,6 +252,13 @@ func (st *SymbolTable) CreateVariable(name string, varType string, mutable bool)
 	st.table[name] = variable
 	st.nextShift += 4 // Próxima variável será 4 bytes adiante
 	st.variableCount++
+}
+
+func (st *SymbolTable) CreateFunction(name string, funcNode *FuncDec) {
+	if st.ExistsCurrent(name) {
+		panic("[Semantic] Função já declarada: " + name)
+	}
+	st.table[name] = NewFunctionVariable(funcNode)
 }
 
 // Initialize define o valor inicial no momento da declaração
@@ -233,11 +272,14 @@ func (st *SymbolTable) Initialize(name string, value *Variable) {
 
 // Set atualiza uma variável já declarada
 func (st *SymbolTable) Set(name string, value *Variable) {
-	if !st.Exists(name) {
+	variable, exists := st.table[name]
+	if !exists {
+		if st.parent != nil {
+			st.parent.Set(name, value)
+			return
+		}
 		panic("[Semantic] Variável não declarada: " + name)
 	}
-
-	variable := st.table[name]
 	if !variable.mutable {
 		panic("[Semantic] Variável imutável: " + name)
 	}
@@ -284,6 +326,9 @@ func (l *Lexer) SelectNext() {
 	if currentChar == '+' {
 		l.next = Token{tokenType: PLUS, value: "+"}
 		l.position++
+	} else if currentChar == '-' && l.position+1 < len(l.source) && l.source[l.position+1] == '>' {
+		l.next = Token{tokenType: ARROW, value: "->"}
+		l.position += 2
 	} else if currentChar == '-' {
 		l.next = Token{tokenType: MINUS, value: "-"}
 		l.position++
@@ -316,6 +361,9 @@ func (l *Lexer) SelectNext() {
 		l.position++
 	} else if currentChar == ':' {
 		l.next = Token{tokenType: COLON, value: ":"}
+		l.position++
+	} else if currentChar == ',' {
+		l.next = Token{tokenType: COMMA, value: ","}
 		l.position++
 	} else if currentChar == '>' {
 		l.next = Token{tokenType: GT, value: ">"}
@@ -383,8 +431,12 @@ func (l *Lexer) SelectNext() {
 			l.next = Token{tokenType: READ, value: "scanln"}
 		} else if identStr == "if" {
 			l.next = Token{tokenType: IF, value: "if"}
+		} else if identStr == "fn" {
+			l.next = Token{tokenType: FUNC, value: "fn"}
 		} else if identStr == "while" {
 			l.next = Token{tokenType: WHILE, value: "while"}
+		} else if identStr == "return" {
+			l.next = Token{tokenType: RETURN, value: "return"}
 		} else if identStr == "else" {
 			l.next = Token{tokenType: ELSE, value: "else"}
 		} else if identStr == "let" {
@@ -734,7 +786,11 @@ func NewIdentifier(name string) *Identifier {
 }
 
 func (n *Identifier) Evaluate(st *SymbolTable) *Variable {
-	return st.Get(n.name).Clone()
+	variable := st.Get(n.name)
+	if variable.isFunc {
+		panic("[Semantic] Identificador nao e variavel: " + n.name)
+	}
+	return variable.Clone()
 }
 
 func (n *Identifier) Generate(st *SymbolTable) {
@@ -793,14 +849,17 @@ func (n *Assignment) Evaluate(st *SymbolTable) *Variable {
 	identNode := n.children[0].(*Identifier)
 	value := n.children[1].Evaluate(st)
 
-	if !st.Exists(identNode.name) {
+	if st.Exists(identNode.name) {
+		st.Set(identNode.name, value)
+		return NewVoidVariable()
+	}
+	if st.parent == nil {
 		// Compatibilidade com programas antigos: primeira atribuição declara implicitamente.
 		st.CreateVariable(identNode.name, value.varType, true)
 		st.Initialize(identNode.name, value)
 		return NewVoidVariable()
 	}
-
-	st.Set(identNode.name, value)
+	panic("[Semantic] Variável não declarada: " + identNode.name)
 	return NewVoidVariable()
 }
 
@@ -845,7 +904,7 @@ func (n *VarDec) Generate(st *SymbolTable) {
 	identNode := n.children[0].(*Identifier)
 
 	// Primeiro, cria a variável na tabela de símbolos
-	if !st.Exists(identNode.name) {
+	if !st.ExistsCurrent(identNode.name) {
 		st.CreateVariable(identNode.name, n.value, n.mutable)
 	}
 
@@ -858,6 +917,113 @@ func (n *VarDec) Generate(st *SymbolTable) {
 		// EAX contém o valor
 		codeGenerator.Append(fmt.Sprintf("  mov [ebp-%d], eax ; Initialize %s", variable.shift, identNode.name))
 	}
+}
+
+// FuncDec representa a declaracao de funcao
+type FuncDec struct {
+	value    string
+	children []Node
+	id       int
+}
+
+func NewFuncDec(returnType string, identifier Node, params []Node, body Node) *FuncDec {
+	children := []Node{identifier}
+	children = append(children, params...)
+	children = append(children, body)
+	return &FuncDec{value: returnType, children: children, id: GetNextNodeID()}
+}
+
+func (n *FuncDec) Evaluate(st *SymbolTable) *Variable {
+	identNode := n.children[0].(*Identifier)
+	st.Root().CreateFunction(identNode.name, n)
+	return NewVoidVariable()
+}
+
+func (n *FuncDec) Generate(st *SymbolTable) {
+	// Funcoes nao sao geradas em assembly neste estagio
+}
+
+// FuncCall representa a chamada de uma funcao
+type FuncCall struct {
+	name     string
+	children []Node
+	id       int
+}
+
+func NewFuncCall(name string, args []Node) *FuncCall {
+	return &FuncCall{name: name, children: args, id: GetNextNodeID()}
+}
+
+func (n *FuncCall) Evaluate(st *SymbolTable) *Variable {
+	variable := st.Get(n.name)
+	if !variable.isFunc {
+		panic("[Semantic] Identificador nao e funcao: " + n.name)
+	}
+
+	funcNode, ok := variable.value.(*FuncDec)
+	if !ok {
+		panic("[Semantic] Referencia invalida para funcao: " + n.name)
+	}
+
+	paramCount := len(funcNode.children) - 2
+	if len(n.children) != paramCount {
+		panic("[Semantic] Numero incorreto de argumentos em chamada de " + n.name)
+	}
+
+	callScope := NewSymbolTable(st.Root())
+	for i := 0; i < paramCount; i++ {
+		paramNode := funcNode.children[i+1].(*VarDec)
+		paramIdent := paramNode.children[0].(*Identifier)
+
+		argValue := n.children[i].Evaluate(st)
+		if argValue.varType != paramNode.value {
+			panic("[Semantic] Tipo de argumento invalido em chamada de " + n.name)
+		}
+
+		callScope.CreateVariable(paramIdent.name, paramNode.value, paramNode.mutable)
+		callScope.Initialize(paramIdent.name, argValue)
+	}
+
+	body := funcNode.children[len(funcNode.children)-1]
+	result := body.Evaluate(callScope)
+
+	if result.varType == TYPE_VOID {
+		if funcNode.value != TYPE_VOID {
+			panic("[Semantic] Funcao sem retorno: " + n.name)
+		}
+		return NewVoidVariable()
+	}
+
+	if funcNode.value == TYPE_VOID {
+		panic("[Semantic] Retorno inesperado em funcao void: " + n.name)
+	}
+	if result.varType != funcNode.value {
+		panic("[Semantic] Tipo de retorno invalido em funcao: " + n.name)
+	}
+
+	return result
+}
+
+func (n *FuncCall) Generate(st *SymbolTable) {
+	// Chamadas de funcao nao sao geradas em assembly neste estagio
+}
+
+// Return representa o retorno de funcao
+type Return struct {
+	children []Node
+	id       int
+}
+
+func NewReturn(expr Node) *Return {
+	return &Return{children: []Node{expr}, id: GetNextNodeID()}
+}
+
+func (n *Return) Evaluate(st *SymbolTable) *Variable {
+	return n.children[0].Evaluate(st)
+}
+
+func (n *Return) Generate(st *SymbolTable) {
+	// Retorno nao e gerado em assembly neste estagio
 }
 
 // IfNode representa uma estrutura condicional if/else
@@ -880,9 +1046,15 @@ func (n *IfNode) Evaluate(st *SymbolTable) *Variable {
 		panic("[Semantic] if condition must be bool")
 	}
 	if condition.value.(bool) {
-		n.children[1].Evaluate(st)
+		result := evaluateWithScope(n.children[1], st)
+		if result.varType != TYPE_VOID {
+			return result
+		}
 	} else if len(n.children) == 3 {
-		n.children[2].Evaluate(st)
+		result := evaluateWithScope(n.children[2], st)
+		if result.varType != TYPE_VOID {
+			return result
+		}
 	}
 	return NewVoidVariable()
 }
@@ -930,7 +1102,10 @@ func (n *WhileNode) Evaluate(st *SymbolTable) *Variable {
 		if !condition.value.(bool) {
 			break
 		}
-		n.children[1].Evaluate(st)
+		result := evaluateWithScope(n.children[1], st)
+		if result.varType != TYPE_VOID {
+			return result
+		}
 	}
 	return NewVoidVariable()
 }
@@ -985,6 +1160,13 @@ func (n *ReadNode) Generate(st *SymbolTable) {
 	codeGenerator.Append("  mov eax, dword [scan_int] ; retorna o valor lido em EAX")
 }
 
+func evaluateWithScope(child Node, st *SymbolTable) *Variable {
+	if _, ok := child.(*Block); ok {
+		return child.Evaluate(NewSymbolTable(st))
+	}
+	return child.Evaluate(st)
+}
+
 // Block representa um bloco de instruções
 type Block struct {
 	children []Node
@@ -1001,7 +1183,10 @@ func (b *Block) AddChild(node Node) {
 
 func (n *Block) Evaluate(st *SymbolTable) *Variable {
 	for _, child := range n.children {
-		child.Evaluate(st)
+		result := evaluateWithScope(child, st)
+		if result.varType != TYPE_VOID {
+			return result
+		}
 	}
 	return NewVoidVariable()
 }
@@ -1042,11 +1227,159 @@ func ParseProgram() Node {
 	block := NewBlock()
 
 	for parserLexer.next.tokenType != EOF {
-		stmt := ParseStatement()
-		block.AddChild(stmt)
+		if parserLexer.next.tokenType == FUNC {
+			block.AddChild(ParseFuncDeclaration())
+			continue
+		}
+		if parserLexer.next.tokenType == LET {
+			block.AddChild(ParseVarDeclaration())
+			continue
+		}
+		panic("[Parser] Unexpected token in program: " + parserLexer.next.tokenType)
 	}
 
 	return block
+}
+
+func ParseVarDeclaration() Node {
+	// Declaração: let [mut] IDENTIFIER : TYPE [= BOOLEXPRESSION] ;
+	if parserLexer.next.tokenType != LET {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected LET")
+	}
+	parserLexer.SelectNext()
+
+	isMutable := false
+	if parserLexer.next.tokenType == MUT {
+		isMutable = true
+		parserLexer.SelectNext()
+	}
+
+	if parserLexer.next.tokenType != IDEN {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected IDEN")
+	}
+	name := parserLexer.next.value.(string)
+	parserLexer.SelectNext()
+
+	if parserLexer.next.tokenType != COLON {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected COLON")
+	}
+	parserLexer.SelectNext()
+
+	if parserLexer.next.tokenType != TYPE {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected TYPE")
+	}
+	declaredType := parserLexer.next.value.(string)
+	parserLexer.SelectNext()
+
+	var expr Node = nil
+	if parserLexer.next.tokenType == ASSIGN {
+		parserLexer.SelectNext()
+		expr = ParseBoolExpression()
+	}
+
+	if parserLexer.next.tokenType != END {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;) ")
+	}
+	parserLexer.SelectNext()
+
+	return NewVarDec(declaredType, isMutable, NewIdentifier(name), expr)
+}
+
+func ParseFuncDeclaration() Node {
+	// Declaracao: fn IDENTIFIER ( [IDENTIFIER : TYPE {, IDENTIFIER : TYPE}] ) [-> TYPE | -> ()] BLOCK
+	if parserLexer.next.tokenType != FUNC {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected FUNC")
+	}
+	parserLexer.SelectNext()
+
+	if parserLexer.next.tokenType != IDEN {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected IDEN")
+	}
+	funcName := parserLexer.next.value.(string)
+	parserLexer.SelectNext()
+
+	if parserLexer.next.tokenType != OPEN_PAR {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_PAR")
+	}
+	parserLexer.SelectNext()
+
+	params := []Node{}
+	if parserLexer.next.tokenType != CLOSE_PAR {
+		for {
+			if parserLexer.next.tokenType != IDEN {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected IDEN")
+			}
+			paramName := parserLexer.next.value.(string)
+			parserLexer.SelectNext()
+
+			if parserLexer.next.tokenType != COLON {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected COLON")
+			}
+			parserLexer.SelectNext()
+
+			if parserLexer.next.tokenType != TYPE {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected TYPE")
+			}
+			paramType := parserLexer.next.value.(string)
+			parserLexer.SelectNext()
+
+			params = append(params, NewVarDec(paramType, false, NewIdentifier(paramName), nil))
+
+			if parserLexer.next.tokenType != COMMA {
+				break
+			}
+			parserLexer.SelectNext()
+		}
+	}
+
+	if parserLexer.next.tokenType != CLOSE_PAR {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+	}
+	parserLexer.SelectNext()
+
+	returnType := TYPE_VOID
+	if parserLexer.next.tokenType == ARROW {
+		parserLexer.SelectNext()
+		if parserLexer.next.tokenType == TYPE {
+			returnType = parserLexer.next.value.(string)
+			parserLexer.SelectNext()
+		} else if parserLexer.next.tokenType == OPEN_PAR {
+			parserLexer.SelectNext()
+			if parserLexer.next.tokenType != CLOSE_PAR {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+			}
+			parserLexer.SelectNext()
+			returnType = TYPE_VOID
+		} else {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected TYPE or ()")
+		}
+	}
+
+	body := ParseBlock()
+	return NewFuncDec(returnType, NewIdentifier(funcName), params, body)
+}
+
+func ParseFuncCallWithName(name string) Node {
+	if parserLexer.next.tokenType != OPEN_PAR {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected OPEN_PAR")
+	}
+	parserLexer.SelectNext()
+
+	args := []Node{}
+	if parserLexer.next.tokenType != CLOSE_PAR {
+		args = append(args, ParseBoolExpression())
+		for parserLexer.next.tokenType == COMMA {
+			parserLexer.SelectNext()
+			args = append(args, ParseBoolExpression())
+		}
+	}
+
+	if parserLexer.next.tokenType != CLOSE_PAR {
+		panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected CLOSE_PAR")
+	}
+	parserLexer.SelectNext()
+
+	return NewFuncCall(name, args)
 }
 
 func ParseBlock() Node {
@@ -1076,43 +1409,7 @@ func ParseStatement() Node {
 
 	// Declaração: let [mut] IDENTIFIER : TYPE [= BOOLEXPRESSION] ;
 	if parserLexer.next.tokenType == LET {
-		parserLexer.SelectNext()
-
-		isMutable := false
-		if parserLexer.next.tokenType == MUT {
-			isMutable = true
-			parserLexer.SelectNext()
-		}
-
-		if parserLexer.next.tokenType != IDEN {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected IDEN")
-		}
-		name := parserLexer.next.value.(string)
-		parserLexer.SelectNext()
-
-		if parserLexer.next.tokenType != COLON {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected COLON")
-		}
-		parserLexer.SelectNext()
-
-		if parserLexer.next.tokenType != TYPE {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected TYPE")
-		}
-		declaredType := parserLexer.next.value.(string)
-		parserLexer.SelectNext()
-
-		var expr Node = nil
-		if parserLexer.next.tokenType == ASSIGN {
-			parserLexer.SelectNext()
-			expr = ParseBoolExpression()
-		}
-
-		if parserLexer.next.tokenType != END {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;) ")
-		}
-		parserLexer.SelectNext()
-
-		return NewVarDec(declaredType, isMutable, NewIdentifier(name), expr)
+		return ParseVarDeclaration()
 	}
 
 	// IF: if ( BOOLEXPRESSION ) STATEMENT [else STATEMENT]
@@ -1167,15 +1464,23 @@ func ParseStatement() Node {
 		name := parserLexer.next.value.(string)
 		parserLexer.SelectNext()
 
+		if parserLexer.next.tokenType == OPEN_PAR {
+			call := ParseFuncCallWithName(name)
+			if parserLexer.next.tokenType != END {
+				panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;) ")
+			}
+			parserLexer.SelectNext()
+			return call
+		}
 		if parserLexer.next.tokenType != ASSIGN {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected ASSIGN")
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected ASSIGN or OPEN_PAR")
 		}
 		parserLexer.SelectNext()
 
 		expr := ParseBoolExpression()
 
 		if parserLexer.next.tokenType != END {
-			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;)")
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;) ")
 		}
 		parserLexer.SelectNext()
 
@@ -1204,6 +1509,17 @@ func ParseStatement() Node {
 		parserLexer.SelectNext()
 
 		return NewPrint(expr)
+	}
+
+	// Return: return BOOLEXPRESSION ;
+	if parserLexer.next.tokenType == RETURN {
+		parserLexer.SelectNext()
+		expr := ParseBoolExpression()
+		if parserLexer.next.tokenType != END {
+			panic("[Parser] Unexpected token: " + parserLexer.next.tokenType + ", expected END (;) ")
+		}
+		parserLexer.SelectNext()
+		return NewReturn(expr)
 	}
 
 	// Linha vazia: ;
@@ -1351,6 +1667,9 @@ func ParseFactor() Node {
 	if parserLexer.next.tokenType == IDEN {
 		name := parserLexer.next.value.(string)
 		parserLexer.SelectNext()
+		if parserLexer.next.tokenType == OPEN_PAR {
+			return ParseFuncCallWithName(name)
+		}
 		return NewIdentifier(name)
 	}
 
@@ -1370,6 +1689,9 @@ func Run(code string) Node {
 	parserLexer.SelectNext()
 
 	result := ParseProgram()
+	if programBlock, ok := result.(*Block); ok {
+		programBlock.AddChild(NewFuncCall("main", []Node{}))
+	}
 
 	if parserLexer.next.tokenType != EOF {
 		panic("[Parser] Unexpected token after program: " + parserLexer.next.tokenType)
@@ -1405,7 +1727,7 @@ func main() {
 	ast := Run(code)
 
 	// EXECUÇÃO: Criar tabela de símbolos e executar
-	st := NewSymbolTable()
+	st := NewSymbolTable(nil)
 	ast.Evaluate(st)
 
 	// GERAÇÃO DE CÓDIGO: Reinicializa para gerar assembly
@@ -1413,7 +1735,7 @@ func main() {
 	nextNodeID = 0
 
 	// Cria nova tabela de símbolos para geração
-	stGen := NewSymbolTable()
+	stGen := NewSymbolTable(nil)
 
 	// Gera o código assembly
 	ast.Generate(stGen)
