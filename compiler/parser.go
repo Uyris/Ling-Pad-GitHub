@@ -12,6 +12,9 @@ func ParseProgram() Node {
 	for parserLexer.next.tokenType != EOF {
 		if parserLexer.next.tokenType == STRUCT {
 			block.AddChild(ParseStructDeclaration())
+			if parserLexer.next.tokenType == END {
+				parserLexer.SelectNext()
+			}
 			continue
 		}
 		if parserLexer.next.tokenType == FUNC {
