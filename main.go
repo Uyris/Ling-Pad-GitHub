@@ -813,11 +813,10 @@ func (n *Print) Evaluate(st *SymbolTable) *Variable {
 	if result.varType == TYPE_VOID {
 		fmt.Println("<void>")
 	} else if result.varType == TYPE_BOOL {
-		// Converte booleano para 0/1
 		if result.value.(bool) {
-			fmt.Println(1)
+			fmt.Println("true")
 		} else {
-			fmt.Println(0)
+			fmt.Println("false")
 		}
 	} else {
 		fmt.Println(result.value)
