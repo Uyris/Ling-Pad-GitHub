@@ -1745,5 +1745,4 @@ func main() {
 
 	// Escreve o arquivo assembly
 	codeGenerator.Dump(outputFilename)
-	fmt.Println("[Main] Arquivo gerado: " + outputFilename)
 }
